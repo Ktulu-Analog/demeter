@@ -1,0 +1,84 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg-primary:      #ffffff;
+  --bg-secondary:    #f4f4f4;
+  --bg-tertiary:     #e8e8e8;
+  --bg-hover:        #efefef;
+  --text-primary:    #111111;
+  --text-secondary:  #555555;
+  --text-tertiary:   #999999;
+  --border-light:    rgba(0,0,0,0.08);
+  --border-medium:   rgba(0,0,0,0.16);
+
+  --green-light:     #f0f0f0;
+  --green-mid:       #333333;
+  --green-dark:      #111111;
+  --green-deep:      #000000;
+  --green-glow:      rgba(0,0,0,0.08);
+
+  --amber-light:     #faeeda;
+  --amber-dark:      #633806;
+  --blue-light:      #e6f1fb;
+  --blue-mid:        #3080d8;
+  --blue-dark:       #185fa5;
+  --red-light:       #fcebeb;
+  --red-dark:        #a32d2d;
+
+  --radius-sm:       5px;
+  --radius-md:       8px;
+  --radius-lg:       12px;
+  --radius-xl:       16px;
+  --radius-2xl:      20px;
+
+  --font-display:    'Sora', sans-serif;
+  --font-body:       'DM Sans', sans-serif;
+  --font-mono:       'JetBrains Mono', 'Fira Code', monospace;
+
+  --shadow-sm:       0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow-md:       0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+  --shadow-lg:       0 10px 30px rgba(0,0,0,0.1), 0 4px 8px rgba(0,0,0,0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary:      #1a1a1a;
+    --bg-secondary:    #242424;
+    --bg-tertiary:     #111111;
+    --bg-hover:        #2e2e2e;
+    --text-primary:    #f0f0f0;
+    --text-secondary:  #aaaaaa;
+    --text-tertiary:   #666666;
+    --border-light:    rgba(255,255,255,0.07);
+    --border-medium:   rgba(255,255,255,0.14);
+    --green-light:     #2a2a2a;
+    --green-dark:      #dddddd;
+    --green-deep:      #f0f0f0;
+    --green-glow:      rgba(255,255,255,0.07);
+    --amber-light:     #3a2408;
+    --amber-dark:      #fac775;
+    --blue-light:      #071e35;
+    --blue-dark:       #85b7eb;
+    --red-light:       #2d0d0d;
+    --red-dark:        #f09595;
+    --shadow-sm:       0 1px 3px rgba(0,0,0,0.3);
+    --shadow-md:       0 4px 12px rgba(0,0,0,0.35);
+    --shadow-lg:       0 10px 30px rgba(0,0,0,0.45);
+  }
+}
+
+html, body, #root { height: 100%; }
+
+body {
+  font-family: var(--font-body);
+  font-size: 14px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-medium); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-tertiary); }

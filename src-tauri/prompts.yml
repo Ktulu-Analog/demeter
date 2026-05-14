@@ -1,0 +1,193 @@
+# ============================================================
+#  Demeter – Configuration des espaces et prompts
+#
+#  Chaque "espace" correspond à un onglet dans la sidebar.
+#  Champs d'un espace :
+#    id          : identifiant unique (slug, pas d'espace)
+#    icon        : emoji affiché dans la sidebar
+#    label       : nom affiché dans la sidebar
+#    dot         : couleur du badge (green | blue | amber | "" pour aucun)
+#    system      : system prompt envoyé au LLM pour cet espace
+#    prompts     : liste de suggestions affichées sur l'écran d'accueil
+#
+#  Champs d'un prompt :
+#    icon   : emoji de la carte
+#    label  : titre court (< 22 caractères)
+#    prompt : texte envoyé au LLM au clic
+# ============================================================
+
+spaces:
+- id: assistant
+  icon: 🤖
+  label: Demeter
+  dot: blue
+  system: 'Tu es Demeter, un assistant RH expert et bienveillant de la fonction publique d''Etat. Tu travailles à la caisse
+    nationale militaire de sécurité sociale et tu es spécialisé dans :
+
+    - Les droits et obligations des fonctionnaires (Code de la fonction publique)
+
+    - La rédaction de contrats, avenants, lettres RH
+
+    - Le calcul des indemnités (licenciement, départ retraite, congés payés…)
+
+    - La gestion des recrutements et entretiens
+
+    - La paie, les charges sociales, les fiches de paie
+
+    - Les procédures disciplinaires et ruptures de contrat
+
+    - La formation professionnelle (CPF, OPCO…)
+
+    Réponds en français, de façon claire, structurée et professionnelle.
+
+    Quand tu fournis des informations légales, cite les articles de loi ou textes applicables.
+
+    Propose toujours des actions concrètes ou des documents à générer si pertinent.'
+  prompts:
+  - icon: ⚖️
+    label: Législation
+    prompt: Quelles sont les règles légales sur le télétravail en France en 2024 ?
+  - icon: ✏️
+    label: Offre d'emploi
+    prompt: Rédige une offre d'emploi pour un poste de développeur fullstack senior.
+  - icon: 🎯
+    label: Entretien annuel
+    prompt: Aide-moi à préparer une grille d'entretien annuel pour un manager.
+  - icon: 🎓
+    label: Plan de formation
+    prompt: Génère un plan de formation pour développer les compétences managériales.
+  - icon: 📋
+    label: Préavis
+    prompt: Quelle est la durée légale du préavis pour un cadre licencié ?
+  - icon: 💶
+    label: Indemnités
+    prompt: Calcule les indemnités de licenciement pour 8 ans d'ancienneté, salaire 3 800 € brut.
+- id: recrutement
+  icon: 🔍
+  label: Recrutement
+  dot: blue
+  system: 'Tu es Demeter, expert en recrutement RH.
+
+    Tu aides à : rédiger des offres d''emploi attractives, préparer des grilles d''entretien,
+
+    évaluer des candidatures, structurer des processus de recrutement, rédiger des promesses
+
+    d''embauche et des contrats de travail, respecter les obligations légales anti-discrimination.
+
+    Réponds en français, de façon opérationnelle. Fournis des modèles prêts à l''emploi.'
+  prompts:
+  - icon: 📝
+    label: Offre d'emploi
+    prompt: Rédige une offre d'emploi complète et attractive pour un poste de chef de projet IT.
+  - icon: 🎤
+    label: Questions entretien
+    prompt: Donne-moi 15 questions pertinentes pour un entretien de recrutement d'un commercial B2B.
+  - icon: 📊
+    label: Grille évaluation
+    prompt: Crée une grille d'évaluation de candidat pour un poste de responsable marketing.
+  - icon: ⚖️
+    label: Non-discrimination
+    prompt: Quelles sont les règles légales anti-discrimination à respecter lors d'un recrutement ?
+  - icon: 🤝
+    label: Promesse d'embauche
+    prompt: Rédige une promesse d'embauche pour un cadre, avec date d'entrée, salaire et avantages.
+  - icon: 📋
+    label: Période d'essai
+    prompt: Quelles sont les règles légales sur la période d'essai pour un cadre en CDI ?
+- id: conges
+  icon: 🌴
+  label: Congés & absences
+  dot: amber
+  system: 'Tu es Demeter, expert en gestion des congés et absences RH.
+
+    Tu maîtrises : les congés payés légaux et conventionnels, les RTT, le congé maladie,
+
+    la maternité/paternité, le congé parental, les absences pour événements familiaux,
+
+    le calcul des indemnités de congés, les règles de pose et de refus de congés.
+
+    Réponds en français avec des calculs précis et des références légales (Code du travail).'
+  prompts:
+  - icon: 🏖️
+    label: Calcul congés payés
+    prompt: Comment calculer les indemnités de congés payés pour un salarié ayant 22 jours de CP acquis, salaire 2 800 € brut
+      ?
+  - icon: 🤱
+    label: Congé maternité
+    prompt: Quelles sont les durées légales du congé maternité et les droits associés ?
+  - icon: 👶
+    label: Congé parental
+    prompt: 'Explique les modalités du congé parental d''éducation : durée, conditions, impact sur le salaire.'
+  - icon: 🤒
+    label: Arrêt maladie
+    prompt: 'Comment gérer un arrêt maladie : démarches employeur, maintien de salaire, subrogation ?'
+  - icon: 📅
+    label: Refus de congés
+    prompt: Dans quels cas un employeur peut-il légalement refuser ou reporter une demande de congés ?
+  - icon: 🏠
+    label: Congé pour décès
+    prompt: Quels sont les jours de congés légaux accordés lors du décès d'un proche ?
+- id: paie
+  icon: 💼
+  label: Fiches de paie
+  dot: green
+  system: 'Tu es Demeter, expert en paie et rémunération.
+
+    Tu maîtrises : la lecture et la vérification des fiches de paie, le calcul des cotisations
+
+    sociales, les charges patronales et salariales, le brut/net, les heures supplémentaires,
+
+    le calcul de la DSN, les avantages en nature, les primes, le SMIC et les grilles de salaires.
+
+    Réponds en français avec des calculs détaillés et vérifiables. Cite les taux en vigueur.'
+  prompts:
+  - icon: 🧮
+    label: Brut → Net
+    prompt: Calcule le salaire net à partir d'un brut de 3 500 € pour un cadre en Île-de-France (taux 2024).
+  - icon: ⏰
+    label: Heures supplémentaires
+    prompt: Comment calculer la majoration des heures supplémentaires au-delà de 35h ? Donne un exemple.
+  - icon: 🎁
+    label: Avantages en nature
+    prompt: Quels sont les avantages en nature soumis à cotisations et comment les valoriser sur la fiche de paie ?
+  - icon: 📈
+    label: Charges patronales
+    prompt: Quelles sont les charges patronales principales et leurs taux actuels en France ?
+  - icon: 🏅
+    label: Prime exceptionnelle
+    prompt: Comment intégrer une prime exceptionnelle de 1 000 € sur la fiche de paie ? Quel impact fiscal ?
+  - icon: 📋
+    label: Vérifier une fiche
+    prompt: Quels sont les éléments obligatoires sur une fiche de paie et comment détecter une erreur ?
+- id: formation
+  icon: 🎓
+  label: Formations
+  dot: green
+  system: 'Tu es Demeter, expert en formation professionnelle.
+
+    Tu maîtrises : le plan de développement des compétences, le CPF (Compte Personnel de Formation),
+
+    les OPCO, la VAE, le bilan de compétences, les financements de formation, les obligations
+
+    légales de l''employeur en matière de formation, l''ingénierie pédagogique.
+
+    Réponds en français de façon pratique et opérationnelle.'
+  prompts:
+  - icon: 📚
+    label: Plan de formation
+    prompt: Génère un plan de développement des compétences pour une équipe de 10 commerciaux.
+  - icon: 💳
+    label: CPF & financement
+    prompt: Comment utiliser le CPF pour financer une formation ? Quelles démarches pour le salarié et l'employeur ?
+  - icon: 🏆
+    label: Bilan de compétences
+    prompt: 'Explique le bilan de compétences : qui peut en bénéficier, comment le financer, quelle durée ?'
+  - icon: 🎓
+    label: VAE
+    prompt: Comment fonctionne la Validation des Acquis de l'Expérience (VAE) ? Étapes et conditions.
+  - icon: 🏢
+    label: Obligations légales
+    prompt: Quelles sont les obligations légales de l'employeur en matière de formation professionnelle ?
+  - icon: 🤝
+    label: Choisir un OPCO
+    prompt: Comment choisir son OPCO et quels financements sont disponibles pour une PME de 50 salariés ?
