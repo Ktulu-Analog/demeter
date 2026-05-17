@@ -57,8 +57,10 @@ async fn parse_sse_stream(resp: reqwest::Response) -> Option<Value> {
 
         // Les blocs SSE sont séparés par "\r\n\r\n" ou "\n\n"
         loop {
-            let sep = buf.find("\r\n\r\n").map(|i| (i, 4))
-            .or_else(|| buf.find("\n\n").map(|i| (i, 2)));
+            let sep = buf
+                .find("\r\n\r\n")
+                .map(|i| (i, 4))
+                .or_else(|| buf.find("\n\n").map(|i| (i, 2)));
             let (end, sep_len) = match sep {
                 Some(s) => s,
                 None => break,
