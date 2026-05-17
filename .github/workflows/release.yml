@@ -60,6 +60,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
