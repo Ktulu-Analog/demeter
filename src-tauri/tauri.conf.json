@@ -41,7 +41,7 @@
     "longDescription": "Demeter est un assistant IA desktop utilisant les API Albert et Anthropic, conçu pour les professionnels RH.",
     "windows": {
       "digestAlgorithm": "sha256",
-      "timestampUrl": "",
+      "timestampUrl": null,
       "wix": {
         "language": "fr-FR",
         "bannerPath": "installer/banner.bmp",
