@@ -56,13 +56,12 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
-      - name: Install frontend dependencies
-        working-directory: frontend
-        run: npm ci
-
-      - name: Build frontend
-        working-directory: frontend
-        run: npm run build
+      # Installe @tauri-apps/cli à la racine (utilisé par tauri-action)
+      # et les dépendances frontend, puis builde le frontend
+      - name: Install dependencies & build frontend
+        run: |
+          npm ci
+          cd frontend && npm ci && npm run build
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
@@ -76,3 +75,5 @@ jobs:
           releaseDraft: false
           prerelease: false
           projectPath: .
+          # Le frontend est déjà buildé — on court-circuite beforeBuildCommand
+          beforeBuildCommand: ''
