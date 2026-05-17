@@ -740,7 +740,7 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
 
         let llm_stream = resp
             .bytes_stream()
-            .map(|result| result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
+            .map(|result| result.map_err(std::io::Error::other));
 
         use axum::body::Body;
         use axum::http::header;
@@ -988,7 +988,7 @@ async fn list_models(
 // ── Extract ───────────────────────────────────────────────────────────────────
 
 async fn extract_file(mut multipart: Multipart) -> Response {
-    while let Ok(Some(field)) = multipart.next_field().await {
+    if let Ok(Some(field)) = multipart.next_field().await {
         let filename = field.file_name().unwrap_or("file").to_string();
         let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
         let bytes = match field.bytes().await {

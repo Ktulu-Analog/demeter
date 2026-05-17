@@ -114,11 +114,10 @@ fn docx_xml_to_text(xml: &str) -> String {
                     || tag.as_bytes().get(3) == Some(&b' ')
                     || tag.as_bytes().get(3) == Some(&b'/')
                     || tag.as_bytes().get(3) == Some(&b'>'))
+                && !text.is_empty() && !after_para
             {
-                if !text.is_empty() && !after_para {
-                    text.push('\n');
-                    after_para = true;
-                }
+                text.push('\n');
+                after_para = true;
             }
 
             i = tag_end + 1;
