@@ -40,15 +40,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # tauri::generate_context!() résout frontendDist relativement à tauri.conf.json
-      # et vérifie l'existence du dossier au moment de la compilation.
-      # On crée un stub avec un chemin absolu pour éviter toute ambiguïté
-      # liée au working-directory des étapes Cargo.
-      - name: Create frontend/build stub
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/frontend/build"
-          echo '<html><body></body></html>' > "$GITHUB_WORKSPACE/frontend/build/index.html"
-
       - name: Install system dependencies (Linux)
         run: |
           sudo apt-get update
@@ -71,22 +62,23 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
+          # La clé inclut les features pour éviter de réutiliser des artefacts
+          # compilés avec custom-protocol (qui déclenche le check frontendDist)
+          key: ${{ runner.os }}-cargo-no-default-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-no-default-
 
       - name: Check formatting
         working-directory: src-tauri
         run: cargo fmt --check
 
-      # --no-default-features désactive `custom-protocol` qui force Tauri à embarquer
-      # le dossier frontendDist dans le binaire — inutile pour du lint/check en CI.
-      # Le stub suffit à satisfaire generate_context!(), mais on évite ainsi
-      # toute vérification d'intégrité supplémentaire liée au feature.
+      # Sans custom-protocol, tauri-codegen passe en mode dev (dev=true) et
+      # court-circuite le check de frontendDist dès que devUrl est défini.
+      # Aucun stub frontend/build nécessaire.
       - name: Clippy
         working-directory: src-tauri
         run: cargo clippy --no-default-features -- -D warnings
 
-      - name: Build (check)
+      - name: Check
         working-directory: src-tauri
         run: cargo check --no-default-features
 
