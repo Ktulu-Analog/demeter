@@ -11,7 +11,12 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
-export const API_BASE = '';
+// En développement, Vite proxifie /api-proxy/* vers http://localhost:45678,
+// donc une base vide suffit. En production Tauri, le frontend est servi depuis
+// tauri://localhost (Linux/macOS) ou https://tauri.localhost (Windows) : il
+// n'y a plus de proxy, il faut cibler le serveur Axum directement.
+const isTauri = typeof (window as any).__TAURI__ !== 'undefined';
+export const API_BASE: string = isTauri ? 'http://localhost:45678' : '';
 
 export const IMAGE_MIME: string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 export const IMAGE_EXTS: string[] = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
