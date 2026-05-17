@@ -5,8 +5,8 @@
   "scripts": {
     "dev": "cd frontend && npm run dev",
     "build": "cd frontend && npm run build",
-    "tauri": "cd frontend && npm install && cd .. && cargo tauri dev",
-    "tauri:build": "cd frontend && npm install && npm run build && cd .. && cargo tauri build"
+    "tauri": "npx tauri",
+    "tauri:build": "cd frontend && npm install && npm run build && cd .. && npx tauri build"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
