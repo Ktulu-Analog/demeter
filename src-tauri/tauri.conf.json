@@ -60,8 +60,7 @@
     "linux": {
       "deb": {
         "section": "utils"
-      },
-      "category": "Utility"
+      }
     }
   }
 }
