@@ -53,8 +53,7 @@
         "installerIcon": "icons/icon.ico",
         "headerImage": "installer/header.bmp",
         "sidebarImage": "installer/sidebar.bmp",
-        "license": "installer/license.html",
-        "customNsisScript": "installer/nsis-custom.nsh"
+        "license": "installer/license.html"
       }
     },
     "linux": {
