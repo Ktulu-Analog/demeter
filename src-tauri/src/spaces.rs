@@ -11,7 +11,6 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;

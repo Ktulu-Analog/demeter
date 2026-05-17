@@ -72,8 +72,7 @@ impl Database {
 
         let mut conversations = Vec::new();
         for (id, title, space_id, messages_json, created_at, updated_at) in rows {
-            let messages: Vec<Message> =
-                serde_json::from_str(&messages_json).unwrap_or_default();
+            let messages: Vec<Message> = serde_json::from_str(&messages_json).unwrap_or_default();
             conversations.push(Conversation {
                 id,
                 title,

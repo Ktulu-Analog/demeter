@@ -11,7 +11,6 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -110,7 +109,7 @@ pub struct SpacesPayload {
 #[derive(Debug, Clone)]
 pub struct Chunk {
     pub text: String,
-    pub source: String,   // résolu depuis Document.name via API
+    pub source: String, // résolu depuis Document.name via API
     pub page: String,
     pub document_id: i64, // chunk.document_id depuis Albert API
     #[allow(dead_code)]
@@ -136,6 +135,12 @@ pub struct CollectionRenameRequest {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn default_true() -> bool { true }
-fn default_icon() -> String { "💬".to_string() }
-fn default_private() -> String { "private".to_string() }
+fn default_true() -> bool {
+    true
+}
+fn default_icon() -> String {
+    "💬".to_string()
+}
+fn default_private() -> String {
+    "private".to_string()
+}

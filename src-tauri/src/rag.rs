@@ -10,12 +10,7 @@ use crate::models::Chunk;
 
 pub fn albert_base(endpoint: &str) -> String {
     let mut base = endpoint.trim_end_matches('/').to_string();
-    for suffix in &[
-        "/chat/completions",
-        "/rerank",
-        "/embeddings",
-        "/search",
-    ] {
+    for suffix in &["/chat/completions", "/rerank", "/embeddings", "/search"] {
         if base.ends_with(suffix) {
             base = base[..base.len() - suffix.len()].to_string();
         }
@@ -25,11 +20,7 @@ pub fn albert_base(endpoint: &str) -> String {
 
 // ── Collection resolution ─────────────────────────────────────────────────────
 
-pub async fn get_collection_id(
-    space_id: &str,
-    endpoint: &str,
-    bearer: &str,
-) -> Option<i64> {
+pub async fn get_collection_id(space_id: &str, endpoint: &str, bearer: &str) -> Option<i64> {
     let base = albert_base(endpoint);
     let client = Client::builder()
         .timeout(config::timeout_doc_resolve())
@@ -75,33 +66,34 @@ async fn resolve_document_names(
             let bearer = bearer.to_string();
             let client = client.clone();
             async move {
-                let resp = client
-                    .get(&url)
-                    .bearer_auth(&bearer)
-                    .send()
-                    .await;
+                let resp = client.get(&url).bearer_auth(&bearer).send().await;
                 match resp {
-                    Ok(r) if r.status().is_success() => {
-                        match r.json::<Value>().await {
-                            Ok(data) => {
-                                let name = data["name"]
-                                    .as_str()
-                                    .unwrap_or("")
-                                    .to_string();
-                                (doc_id, name)
-                            }
-                            Err(e) => {
-                                warn!("resolve_document_names: parse error for doc {}: {}", doc_id, e);
-                                (doc_id, String::new())
-                            }
+                    Ok(r) if r.status().is_success() => match r.json::<Value>().await {
+                        Ok(data) => {
+                            let name = data["name"].as_str().unwrap_or("").to_string();
+                            (doc_id, name)
                         }
-                    }
+                        Err(e) => {
+                            warn!(
+                                "resolve_document_names: parse error for doc {}: {}",
+                                doc_id, e
+                            );
+                            (doc_id, String::new())
+                        }
+                    },
                     Ok(r) => {
-                        warn!("resolve_document_names: HTTP {} for doc {}", r.status(), doc_id);
+                        warn!(
+                            "resolve_document_names: HTTP {} for doc {}",
+                            r.status(),
+                            doc_id
+                        );
                         (doc_id, String::new())
                     }
                     Err(e) => {
-                        warn!("resolve_document_names: request error for doc {}: {}", doc_id, e);
+                        warn!(
+                            "resolve_document_names: request error for doc {}: {}",
+                            doc_id, e
+                        );
                         (doc_id, String::new())
                     }
                 }
@@ -121,10 +113,7 @@ pub async fn search_chunks(
     bearer: &str,
 ) -> Vec<Chunk> {
     let base = albert_base(endpoint);
-    let client = match Client::builder()
-        .timeout(config::timeout_rag())
-        .build()
-    {
+    let client = match Client::builder().timeout(config::timeout_rag()).build() {
         Ok(c) => c,
         Err(e) => {
             warn!("search_chunks: client error: {}", e);
@@ -260,10 +249,7 @@ pub async fn rerank_chunks(
     }
 
     let base = albert_base(endpoint);
-    let client = match Client::builder()
-        .timeout(config::timeout_rerank())
-        .build()
-    {
+    let client = match Client::builder().timeout(config::timeout_rerank()).build() {
         Ok(c) => c,
         Err(_) => return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec(),
     };

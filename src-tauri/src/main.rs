@@ -11,7 +11,6 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
-
 // Empêche l'ouverture de la console sous Windows
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

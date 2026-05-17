@@ -35,8 +35,8 @@ use crate::{
     extract::extract_text,
     models::*,
     rag::{
-        build_system_with_rag, chunks_to_context, rerank_chunks,
-        retrieve_context_with_chunks, search_chunks, albert_base,
+        albert_base, build_system_with_rag, chunks_to_context, rerank_chunks,
+        retrieve_context_with_chunks, search_chunks,
     },
     spaces::{load_spaces, save_spaces},
     web_search::fetch_web_search,
@@ -136,31 +136,42 @@ fn default_system() -> String {
 }
 
 fn append_instructions(system: &str) -> String {
-    format!("{}{}{}{}{}{}",
-        system, LATEX_INSTRUCTION, ECHARTS_INSTRUCTION, MERMAID_INSTRUCTION, WORD_INSTRUCTION, IMAGE_INSTRUCTION)
+    format!(
+        "{}{}{}{}{}{}",
+        system,
+        LATEX_INSTRUCTION,
+        ECHARTS_INSTRUCTION,
+        MERMAID_INSTRUCTION,
+        WORD_INSTRUCTION,
+        IMAGE_INSTRUCTION
+    )
 }
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default, Clone)]
 pub struct Credentials {
-    pub endpoint:   String,
-    pub bearer:     String,
+    pub endpoint: String,
+    pub bearer: String,
     pub tavily_key: String,
 }
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db:           Database,
+    pub db: Database,
     pub prompts_path: PathBuf,
-    pub credentials:  Arc<RwLock<Credentials>>,
+    pub credentials: Arc<RwLock<Credentials>>,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
 pub fn build_router(db: Database, prompts_path: PathBuf) -> (Router, Arc<AppState>) {
     let credentials = Arc::new(RwLock::new(Credentials::default()));
-    let state = Arc::new(AppState { db, prompts_path, credentials });
+    let state = Arc::new(AppState {
+        db,
+        prompts_path,
+        credentials,
+    });
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -184,16 +195,31 @@ pub fn build_router(db: Database, prompts_path: PathBuf) -> (Router, Arc<AppStat
         // User
         .route("/api/users/me", get(get_user_me))
         // Extract
-        .route("/api/extract", post(extract_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
-        .route("/api/extract-multiple", post(extract_multiple_files).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
+        .route(
+            "/api/extract",
+            post(extract_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
+        .route(
+            "/api/extract-multiple",
+            post(extract_multiple_files).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         // Ingestion
         .route("/api/ingestion/collections", get(list_collections))
         .route("/api/ingestion/collections", post(create_collection))
         .route("/api/ingestion/collections/:id", patch(rename_collection))
-        .route("/api/ingestion/collections/:id", delete(delete_collection_handler))
-        .route("/api/ingestion/collections/:id/documents", get(list_documents))
+        .route(
+            "/api/ingestion/collections/:id",
+            delete(delete_collection_handler),
+        )
+        .route(
+            "/api/ingestion/collections/:id/documents",
+            get(list_documents),
+        )
         .route("/api/ingestion/documents/:id", delete(delete_document))
-        .route("/api/ingestion/upload", post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
+        .route(
+            "/api/ingestion/upload",
+            post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         // MCP
         .route("/api/mcp/tools", post(mcp_list_tools))
         // Health
@@ -221,15 +247,30 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/api/conversations/:id", delete(delete_conversation))
         .route("/api/users/me", get(get_user_me))
         .route("/api/models", get(list_models))
-        .route("/api/extract", post(extract_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
-        .route("/api/extract-multiple", post(extract_multiple_files).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
+        .route(
+            "/api/extract",
+            post(extract_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
+        .route(
+            "/api/extract-multiple",
+            post(extract_multiple_files).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         .route("/api/ingestion/collections", get(list_collections))
         .route("/api/ingestion/collections", post(create_collection))
         .route("/api/ingestion/collections/:id", patch(rename_collection))
-        .route("/api/ingestion/collections/:id", delete(delete_collection_handler))
-        .route("/api/ingestion/collections/:id/documents", get(list_documents))
+        .route(
+            "/api/ingestion/collections/:id",
+            delete(delete_collection_handler),
+        )
+        .route(
+            "/api/ingestion/collections/:id/documents",
+            get(list_documents),
+        )
         .route("/api/ingestion/documents/:id", delete(delete_document))
-        .route("/api/ingestion/upload", post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
+        .route(
+            "/api/ingestion/upload",
+            post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         .route("/api/mcp/tools", post(mcp_list_tools))
         .route("/api/image-proxy", get(image_proxy))
         .route("/health", get(health))
@@ -264,7 +305,10 @@ async fn image_proxy(Query(params): Query<ImageProxyParams>) -> Response {
     let resp = match client
         .get(&target_url)
         .header("Referer", "https://www.google.com/")
-        .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+        .header(
+            "Accept",
+            "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        )
         .send()
         .await
     {
@@ -288,7 +332,10 @@ async fn image_proxy(Query(params): Query<ImageProxyParams>) -> Response {
 
     // Refuser les réponses non-image pour éviter les abus
     if !content_type.starts_with("image/") {
-        return err(StatusCode::BAD_GATEWAY, format!("Upstream content-type non-image: {}", content_type));
+        return err(
+            StatusCode::BAD_GATEWAY,
+            format!("Upstream content-type non-image: {}", content_type),
+        );
     }
 
     let body_bytes = match resp.bytes().await {
@@ -367,10 +414,7 @@ async fn rag_status() -> Json<Value> {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
-async fn chat(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<ChatRequest>,
-) -> Response {
+async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) -> Response {
     let creds = state.credentials.read().await.clone();
     // Resolve system prompt
     let mut system_prompt = default_system();
@@ -392,7 +436,8 @@ async fn chat(
             crate::models::MessageContent::Text(s) => s.clone(),
             crate::models::MessageContent::Parts(parts) => {
                 // Extraire les parts "text" pour RAG/web search
-                parts.iter()
+                parts
+                    .iter()
                     .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
                     .collect::<Vec<_>>()
                     .join(" ")
@@ -427,8 +472,7 @@ async fn chat(
         None
     };
 
-    let mut final_system =
-        build_system_with_rag(&system_prompt, rag_context.as_deref());
+    let mut final_system = build_system_with_rag(&system_prompt, rag_context.as_deref());
 
     // Web search
     if req.web_search {
@@ -495,10 +539,12 @@ async fn chat(
                 "tool_choice": "auto",
             });
 
-            let resp = match sync_client.post(&endpoint)
+            let resp = match sync_client
+                .post(&endpoint)
                 .bearer_auth(&creds.bearer)
                 .json(&loop_payload)
-                .send().await
+                .send()
+                .await
             {
                 Ok(r) => r,
                 Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -507,7 +553,10 @@ async fn chat(
             if !resp.status().is_success() {
                 let status = resp.status();
                 let body = resp.text().await.unwrap_or_default();
-                return err(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY), body);
+                return err(
+                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+                    body,
+                );
             }
 
             let data: Value = match resp.json().await {
@@ -521,7 +570,12 @@ async fn chat(
 
             // Pas de tool_calls → réponse finale
             // On émet le texte chunk par chunk via un vrai stream SSE (pas en un seul bloc)
-            if finish_reason != "tool_calls" || msg["tool_calls"].as_array().map(|a| a.is_empty()).unwrap_or(true) {
+            if finish_reason != "tool_calls"
+                || msg["tool_calls"]
+                    .as_array()
+                    .map(|a| a.is_empty())
+                    .unwrap_or(true)
+            {
                 info!("MCP: réponse finale après {} tour(s)", turn + 1);
                 let content = msg["content"].as_str().unwrap_or("").to_string();
 
@@ -530,14 +584,18 @@ async fn chat(
 
                 // Injecter les sources RAG en premier si disponibles
                 if !rag_chunks_used.is_empty() {
-                    let sources: Vec<serde_json::Value> = rag_chunks_used.iter().enumerate().map(|(i, c)| {
-                        json!({
-                            "index":        i + 1,
-                            "source":       c.source,
-                            "page":         c.page,
-                            "rerank_score": c.rerank_score,
+                    let sources: Vec<serde_json::Value> = rag_chunks_used
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| {
+                            json!({
+                                "index":        i + 1,
+                                "source":       c.source,
+                                "page":         c.page,
+                                "rerank_score": c.rerank_score,
+                            })
                         })
-                    }).collect();
+                        .collect();
                     let ev = format!(
                         "event: rag_sources\ndata: {}\n\n",
                         serde_json::to_string(&json!({ "sources": sources })).unwrap_or_default()
@@ -563,13 +621,14 @@ async fn chat(
 
                 // Émettre les chunks via un stream async avec micro-délai entre chaque
                 // pour que le frontend reçoive et affiche les tokens progressivement.
-                let stream = futures::stream::iter(sse_chunks.into_iter().enumerate())
-                    .then(|(i, chunk)| async move {
+                let stream = futures::stream::iter(sse_chunks.into_iter().enumerate()).then(
+                    |(i, chunk)| async move {
                         if i > 0 {
                             tokio::time::sleep(tokio::time::Duration::from_millis(8)).await;
                         }
                         Ok::<Bytes, std::io::Error>(chunk)
-                    });
+                    },
+                );
 
                 use axum::http::header;
                 return axum::response::Response::builder()
@@ -588,23 +647,28 @@ async fn chat(
             // Exécuter chaque tool_call
             if let Some(tool_calls) = msg["tool_calls"].as_array() {
                 for tc in tool_calls {
-                    let tc_id   = tc["id"].as_str().unwrap_or("").to_string();
+                    let tc_id = tc["id"].as_str().unwrap_or("").to_string();
                     let fn_name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                    let fn_args: Value = serde_json::from_str(
-                        tc["function"]["arguments"].as_str().unwrap_or("{}")
-                    ).unwrap_or(json!({}));
+                    let fn_args: Value =
+                        serde_json::from_str(tc["function"]["arguments"].as_str().unwrap_or("{}"))
+                            .unwrap_or(json!({}));
 
                     // Retrouver le serveur MCP à partir du préfixe du nom du tool
                     // Format : mcp__{slug}__{tool_name}
                     let parts: Vec<&str> = fn_name.splitn(3, "__").collect();
                     let real_tool_name = if parts.len() == 3 { parts[2] } else { &fn_name };
-                    let server = req.mcp_servers.iter()
-                        .find(|s| fn_name.starts_with(&format!("mcp__{}", crate::mcp::server_slug(s))))
+                    let server = req
+                        .mcp_servers
+                        .iter()
+                        .find(|s| {
+                            fn_name.starts_with(&format!("mcp__{}", crate::mcp::server_slug(s)))
+                        })
                         .cloned()
                         .unwrap_or_else(|| req.mcp_servers[0].clone());
 
                     info!("MCP: appel tool {} sur {}", real_tool_name, server);
-                    let result = crate::mcp::call_tool(&client, &server, real_tool_name, &fn_args).await;
+                    let result =
+                        crate::mcp::call_tool(&client, &server, real_tool_name, &fn_args).await;
 
                     loop_messages.push(json!({
                         "role": "tool",
@@ -653,14 +717,18 @@ async fn chat(
 
         // Préparer l'event rag_sources à injecter en tête du stream
         let rag_prefix: bytes::Bytes = if !rag_chunks_used.is_empty() {
-            let sources: Vec<serde_json::Value> = rag_chunks_used.iter().enumerate().map(|(i, c)| {
-                json!({
-                    "index":        i + 1,
-                    "source":       c.source,
-                    "page":         c.page,
-                    "rerank_score": c.rerank_score,
+            let sources: Vec<serde_json::Value> = rag_chunks_used
+                .iter()
+                .enumerate()
+                .map(|(i, c)| {
+                    json!({
+                        "index":        i + 1,
+                        "source":       c.source,
+                        "page":         c.page,
+                        "rerank_score": c.rerank_score,
+                    })
                 })
-            }).collect();
+                .collect();
             let event = format!(
                 "event: rag_sources\ndata: {}\n\n",
                 serde_json::to_string(&json!({ "sources": sources })).unwrap_or_default()
@@ -670,9 +738,9 @@ async fn chat(
             bytes::Bytes::new()
         };
 
-        let llm_stream = resp.bytes_stream().map(|result| {
-            result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-        });
+        let llm_stream = resp
+            .bytes_stream()
+            .map(|result| result.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)));
 
         use axum::body::Body;
         use axum::http::header;
@@ -706,7 +774,10 @@ async fn chat(
             Ok(resp) => {
                 let status = resp.status();
                 let body: Value = resp.json().await.unwrap_or(json!({}));
-                (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+                (
+                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                    Json(body),
+                )
                     .into_response()
             }
             Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -796,8 +867,10 @@ async fn generate_title(
                 .trim()
                 .trim_matches(|c: char| "\"'«»".contains(c))
                 .to_string();
-            Json(json!({"title": if title.is_empty() { "Conversation".to_string() } else { title }}))
-                .into_response()
+            Json(
+                json!({"title": if title.is_empty() { "Conversation".to_string() } else { title }}),
+            )
+            .into_response()
         }
         Err(e) => {
             warn!("generate-title failed: {}", e);
@@ -868,7 +941,10 @@ async fn get_user_me(
         Ok(resp) => {
             let status = resp.status();
             let body: Value = resp.json().await.unwrap_or(json!({}));
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
                 .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -899,7 +975,10 @@ async fn list_models(
         Ok(resp) => {
             let status = resp.status();
             let body: Value = resp.json().await.unwrap_or(json!({"data": []}));
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
                 .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -911,11 +990,7 @@ async fn list_models(
 async fn extract_file(mut multipart: Multipart) -> Response {
     while let Ok(Some(field)) = multipart.next_field().await {
         let filename = field.file_name().unwrap_or("file").to_string();
-        let ext = filename
-            .rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_lowercase();
+        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
         let bytes = match field.bytes().await {
             Ok(b) => b,
             Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
@@ -956,7 +1031,8 @@ async fn extract_multiple_files(mut multipart: Multipart) -> Response {
         match extract_text(&bytes, &ext) {
             Ok(text) => {
                 let chars = text.chars().count();
-                results.push(json!({"filename": filename, "text": text, "chars": chars, "ext": ext}));
+                results
+                    .push(json!({"filename": filename, "text": text, "chars": chars, "ext": ext}));
             }
             Err(e) => {
                 errors.push(json!({"filename": filename, "error": e.to_string()}));
@@ -1000,7 +1076,10 @@ async fn list_collections(
         Ok(resp) => {
             let status = resp.status();
             let body: Value = resp.json().await.unwrap_or(json!({}));
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
                 .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -1037,7 +1116,10 @@ async fn create_collection(
         Ok(resp) => {
             let status = resp.status();
             let body: Value = resp.json().await.unwrap_or(json!({}));
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
                 .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -1071,7 +1153,10 @@ async fn rename_collection(
                 return Json(json!({"ok": true})).into_response();
             }
             let body: Value = resp.json().await.unwrap_or(json!({"ok": true}));
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
                 .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -1138,7 +1223,10 @@ async fn list_documents(
         Ok(resp) => {
             let status = resp.status();
             let body: Value = resp.json().await.unwrap_or(json!({}));
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
                 .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
@@ -1178,10 +1266,7 @@ async fn delete_document(
     }
 }
 
-async fn upload_document(
-    State(state): State<Arc<AppState>>,
-    mut multipart: Multipart,
-) -> Response {
+async fn upload_document(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
     let creds = state.credentials.read().await.clone();
 
     // Extract fields from multipart
@@ -1260,7 +1345,10 @@ async fn upload_document(
         Ok(resp) => {
             let status = resp.status();
             let body: Value = resp.json().await.unwrap_or(json!({}));
-            (StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK), Json(body))
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
                 .into_response()
         }
         Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),

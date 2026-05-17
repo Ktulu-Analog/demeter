@@ -3,7 +3,6 @@
 /// Toutes les valeurs sont lues depuis les variables d'environnement,
 /// elles-mêmes chargées depuis le fichier `.env` au démarrage (via dotenvy).
 /// Les valeurs par défaut sont définies ici et documentées dans `.env.example`.
-
 use std::time::Duration;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

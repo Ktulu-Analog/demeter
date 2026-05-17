@@ -11,7 +11,6 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
-
 use reqwest::Client;
 use tracing::{info, warn};
 
@@ -24,13 +23,30 @@ fn extract_search_query(user_msg: &str) -> String {
     // Supprime les tournures interrogatives françaises courantes
     let msg = user_msg.trim();
     let patterns = [
-        "quelles sont les ", "quels sont les ", "quelle est ", "quel est ",
-        "qu'est-ce que ", "qu'est-ce qui ", "est-ce que ", "est-ce qu'",
-        "pouvez-vous me dire ", "peux-tu me dire ", "dis-moi ",
-        "donne-moi ", "donnez-moi ", "explique-moi ", "expliquez-moi ",
-        "comment ", "pourquoi ", "où ", "quand ",
-        "récupère ", "récupère sur internet ", "cherche ",
-        "trouve ", "recherche ",
+        "quelles sont les ",
+        "quels sont les ",
+        "quelle est ",
+        "quel est ",
+        "qu'est-ce que ",
+        "qu'est-ce qui ",
+        "est-ce que ",
+        "est-ce qu'",
+        "pouvez-vous me dire ",
+        "peux-tu me dire ",
+        "dis-moi ",
+        "donne-moi ",
+        "donnez-moi ",
+        "explique-moi ",
+        "expliquez-moi ",
+        "comment ",
+        "pourquoi ",
+        "où ",
+        "quand ",
+        "récupère ",
+        "récupère sur internet ",
+        "cherche ",
+        "trouve ",
+        "recherche ",
     ];
     let mut cleaned = msg.to_lowercase();
     for p in &patterns {
@@ -74,7 +90,10 @@ pub async fn fetch_web_search(query: &str, max_results: usize, tavily_key: &str)
 
     // Optimise la query pour la recherche
     let search_query = extract_search_query(query);
-    info!("Tavily: query originale={:?} → query optimisée={:?}", query, search_query);
+    info!(
+        "Tavily: query originale={:?} → query optimisée={:?}",
+        query, search_query
+    );
 
     let client = match Client::builder()
         .timeout(config::timeout_web_search())
@@ -144,7 +163,7 @@ pub async fn fetch_web_search(query: &str, max_results: usize, tavily_key: &str)
                     if let Some(results) = data["results"].as_array() {
                         for r in results.iter().take(max_results) {
                             let title = r["title"].as_str().unwrap_or("Sans titre");
-                            let url   = r["url"].as_str().unwrap_or("");
+                            let url = r["url"].as_str().unwrap_or("");
 
                             // raw_content = texte complet extrait de la page (jusqu'à ~10 000 chars)
                             // content     = snippet court (200-400 chars) — fallback
@@ -154,7 +173,8 @@ pub async fn fetch_web_search(query: &str, max_results: usize, tavily_key: &str)
                             let body_text = if !raw.is_empty() {
                                 // Tronquer à 4 000 chars pour ne pas saturer le contexte
                                 let truncated = if raw.len() > 4000 {
-                                    let cutoff = raw.char_indices()
+                                    let cutoff = raw
+                                        .char_indices()
                                         .map(|(i, _)| i)
                                         .nth(4000)
                                         .unwrap_or(raw.len());
@@ -169,10 +189,7 @@ pub async fn fetch_web_search(query: &str, max_results: usize, tavily_key: &str)
                                 continue;
                             };
 
-                            parts.push(format!(
-                                "### {}\nSource : {}\n\n{}",
-                                title, url, body_text
-                            ));
+                            parts.push(format!("### {}\nSource : {}\n\n{}", title, url, body_text));
                         }
                     }
 
@@ -191,13 +208,18 @@ pub async fn fetch_web_search(query: &str, max_results: usize, tavily_key: &str)
                     let mut image_lines: Vec<String> = Vec::new();
                     if let Some(images) = data["images"].as_array() {
                         for img in images.iter().take(4) {
-                            let url = img.as_str()
+                            let url = img
+                                .as_str()
                                 .map(|s| s.to_string())
                                 .or_else(|| img["url"].as_str().map(|s| s.to_string()));
                             let desc = img["description"].as_str().unwrap_or("").to_string();
                             if let Some(u) = url {
                                 if !u.is_empty() {
-                                    let label = if desc.is_empty() { "Image".to_string() } else { desc };
+                                    let label = if desc.is_empty() {
+                                        "Image".to_string()
+                                    } else {
+                                        desc
+                                    };
                                     image_lines.push(format!("![{}]({})", label, u));
                                 }
                             }

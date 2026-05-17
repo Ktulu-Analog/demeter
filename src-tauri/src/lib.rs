@@ -11,24 +11,23 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
-
 use std::net::SocketAddr;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::Manager;
-use tauri::menu::{Menu, Submenu, MenuItem, PredefinedMenuItem};
 use tracing::info;
 
 mod api;
 mod config;
 mod db;
+mod extract;
 mod mcp;
 mod models;
 mod rag;
 mod spaces;
 mod web_search;
-mod extract;
 
-pub use db::Database;
 pub use api::{AppState, Credentials};
+pub use db::Database;
 
 // ── Commande Tauri : initialise les credentials dans AppState ─────────────────
 // Appelée depuis le frontend via invoke() — IPC synchrone, pas HTTP.
@@ -36,8 +35,8 @@ pub use api::{AppState, Credentials};
 
 #[derive(serde::Deserialize)]
 struct CredentialsPayload {
-    endpoint:   String,
-    bearer:     String,
+    endpoint: String,
+    bearer: String,
     #[serde(default)]
     tavily_key: String,
 }
@@ -48,8 +47,8 @@ async fn init_credentials(
     payload: CredentialsPayload,
 ) -> Result<(), String> {
     let mut creds = state.credentials.write().await;
-    creds.endpoint   = payload.endpoint;
-    creds.bearer     = payload.bearer;
+    creds.endpoint = payload.endpoint;
+    creds.bearer = payload.bearer;
     creds.tavily_key = payload.tavily_key;
     Ok(())
 }
@@ -74,31 +73,94 @@ pub fn run() {
             // ── Menu natif ────────────────────────────────────────────────────
             let handle = app.handle();
 
-            let menu = Menu::with_items(handle, &[
-                // Demeter (app menu sur macOS)
-                &Submenu::with_items(handle, "Demeter", true, &[
-                    &MenuItem::with_id(handle, "new_conv",      "Nouvelle conversation", true, Some("CmdOrCtrl+N"))?,
-                    &PredefinedMenuItem::separator(handle)?,
-                    &MenuItem::with_id(handle, "settings",      "Paramètres…",          true, Some("CmdOrCtrl+,"))?,
-                    &PredefinedMenuItem::separator(handle)?,
-                    &MenuItem::with_id(handle, "quit",          "Quitter",              true, Some("CmdOrCtrl+Q"))?,
-                ])?,
-                // Espaces & Prompts
-                &Submenu::with_items(handle, "Espaces", true, &[
-                    &MenuItem::with_id(handle, "spaces_editor", "Espaces & prompts…",   true, Some("CmdOrCtrl+E"))?,
-                    &MenuItem::with_id(handle, "rag",           "Ingestion RAG…",       true, Some("CmdOrCtrl+R"))?,
-                ])?,
-                // Affichage
-                &Submenu::with_items(handle, "Affichage", true, &[
-                    &MenuItem::with_id(handle, "toggle_sidebar","Afficher/Masquer sidebar", true, Some("CmdOrCtrl+B"))?,
-                    &PredefinedMenuItem::separator(handle)?,
-                    &PredefinedMenuItem::fullscreen(handle, None)?,
-                ])?,
-                // Aide
-                &Submenu::with_items(handle, "Aide", true, &[
-                    &MenuItem::with_id(handle, "about",         "À propos de Demeter…", true, None::<&str>)?,
-                ])?,
-            ])?;
+            let menu = Menu::with_items(
+                handle,
+                &[
+                    // Demeter (app menu sur macOS)
+                    &Submenu::with_items(
+                        handle,
+                        "Demeter",
+                        true,
+                        &[
+                            &MenuItem::with_id(
+                                handle,
+                                "new_conv",
+                                "Nouvelle conversation",
+                                true,
+                                Some("CmdOrCtrl+N"),
+                            )?,
+                            &PredefinedMenuItem::separator(handle)?,
+                            &MenuItem::with_id(
+                                handle,
+                                "settings",
+                                "Paramètres…",
+                                true,
+                                Some("CmdOrCtrl+,"),
+                            )?,
+                            &PredefinedMenuItem::separator(handle)?,
+                            &MenuItem::with_id(
+                                handle,
+                                "quit",
+                                "Quitter",
+                                true,
+                                Some("CmdOrCtrl+Q"),
+                            )?,
+                        ],
+                    )?,
+                    // Espaces & Prompts
+                    &Submenu::with_items(
+                        handle,
+                        "Espaces",
+                        true,
+                        &[
+                            &MenuItem::with_id(
+                                handle,
+                                "spaces_editor",
+                                "Espaces & prompts…",
+                                true,
+                                Some("CmdOrCtrl+E"),
+                            )?,
+                            &MenuItem::with_id(
+                                handle,
+                                "rag",
+                                "Ingestion RAG…",
+                                true,
+                                Some("CmdOrCtrl+R"),
+                            )?,
+                        ],
+                    )?,
+                    // Affichage
+                    &Submenu::with_items(
+                        handle,
+                        "Affichage",
+                        true,
+                        &[
+                            &MenuItem::with_id(
+                                handle,
+                                "toggle_sidebar",
+                                "Afficher/Masquer sidebar",
+                                true,
+                                Some("CmdOrCtrl+B"),
+                            )?,
+                            &PredefinedMenuItem::separator(handle)?,
+                            &PredefinedMenuItem::fullscreen(handle, None)?,
+                        ],
+                    )?,
+                    // Aide
+                    &Submenu::with_items(
+                        handle,
+                        "Aide",
+                        true,
+                        &[&MenuItem::with_id(
+                            handle,
+                            "about",
+                            "À propos de Demeter…",
+                            true,
+                            None::<&str>,
+                        )?],
+                    )?,
+                ],
+            )?;
 
             app.set_menu(menu)?;
 

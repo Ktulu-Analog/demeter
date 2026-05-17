@@ -11,7 +11,6 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
-
 use anyhow::{bail, Result};
 
 const MAX_CHARS: usize = 500_000;
@@ -101,12 +100,21 @@ fn docx_xml_to_text(xml: &str) -> String {
             };
             let tag = &xml[tag_start..tag_end];
 
-            if tag.starts_with("w:t") && (tag.len() == 3 || tag.as_bytes().get(3) == Some(&b' ') || tag.as_bytes().get(3) == Some(&b'/')) {
+            if tag.starts_with("w:t")
+                && (tag.len() == 3
+                    || tag.as_bytes().get(3) == Some(&b' ')
+                    || tag.as_bytes().get(3) == Some(&b'/'))
+            {
                 in_w_t = !tag.ends_with('/');
                 after_para = false;
             } else if tag.starts_with("/w:t") {
                 in_w_t = false;
-            } else if tag.starts_with("w:p") && (tag.len() == 3 || tag.as_bytes().get(3) == Some(&b' ') || tag.as_bytes().get(3) == Some(&b'/') || tag.as_bytes().get(3) == Some(&b'>')) {
+            } else if tag.starts_with("w:p")
+                && (tag.len() == 3
+                    || tag.as_bytes().get(3) == Some(&b' ')
+                    || tag.as_bytes().get(3) == Some(&b'/')
+                    || tag.as_bytes().get(3) == Some(&b'>'))
+            {
                 if !text.is_empty() && !after_para {
                     text.push('\n');
                     after_para = true;

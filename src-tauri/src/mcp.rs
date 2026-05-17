@@ -47,7 +47,10 @@ async fn parse_sse_stream(resp: reqwest::Response) -> Option<Value> {
     while let Some(chunk) = stream.next().await {
         let bytes = match chunk {
             Ok(b) => b,
-            Err(e) => { warn!("MCP SSE read error: {}", e); break; }
+            Err(e) => {
+                warn!("MCP SSE read error: {}", e);
+                break;
+            }
         };
         let text = String::from_utf8_lossy(&bytes).to_string();
         buf.push_str(&text);
@@ -61,7 +64,10 @@ async fn parse_sse_stream(resp: reqwest::Response) -> Option<Value> {
             } else {
                 None
             };
-            let (end, sep_len) = match sep { Some(s) => s, None => break };
+            let (end, sep_len) = match sep {
+                Some(s) => s,
+                None => break,
+            };
 
             let block = buf[..end].to_string();
             buf = buf[end + sep_len..].to_string();
@@ -74,7 +80,9 @@ async fn parse_sse_stream(resp: reqwest::Response) -> Option<Value> {
                 }
             }
 
-            if data.is_empty() || data == "[DONE]" { continue; }
+            if data.is_empty() || data == "[DONE]" {
+                continue;
+            }
 
             match serde_json::from_str::<Value>(&data) {
                 Ok(v) => {
@@ -82,11 +90,16 @@ async fn parse_sse_stream(resp: reqwest::Response) -> Option<Value> {
                         return Some(v);
                     }
                 }
-                Err(e) => { warn!("MCP SSE JSON parse error: {}", e); }
+                Err(e) => {
+                    warn!("MCP SSE JSON parse error: {}", e);
+                }
             }
         }
     }
-    warn!("MCP SSE stream ended — no result found (buf remaining: {}b)", buf.len());
+    warn!(
+        "MCP SSE stream ended — no result found (buf remaining: {}b)",
+        buf.len()
+    );
     None
 }
 
@@ -128,8 +141,13 @@ async fn rpc_post(
     {
         Ok(r) => r,
         Err(e) => {
-            warn!("MCP: send() failed — is_timeout={} is_connect={} is_builder={} — {}",
-                e.is_timeout(), e.is_connect(), e.is_builder(), e);
+            warn!(
+                "MCP: send() failed — is_timeout={} is_connect={} is_builder={} — {}",
+                e.is_timeout(),
+                e.is_connect(),
+                e.is_builder(),
+                e
+            );
             if let Some(url) = e.url() {
                 warn!("MCP: failed URL = {}", url);
             }
@@ -146,7 +164,10 @@ async fn rpc_post(
             .unwrap_or("-")
             .to_string();
         let body_text = resp.text().await.unwrap_or_default();
-        warn!("MCP HTTP {} (x-deny-reason: {}) — {}", status, deny_reason, body_text);
+        warn!(
+            "MCP HTTP {} (x-deny-reason: {}) — {}",
+            status, deny_reason, body_text
+        );
         return None;
     }
 
@@ -216,7 +237,12 @@ pub fn mcp_tool_to_openai(tool: &Value, server_url: &str) -> Value {
 }
 
 /// Exécute un tool MCP et retourne le résultat sous forme de string.
-pub async fn call_tool(client: &Client, server_url: &str, tool_name: &str, arguments: &Value) -> String {
+pub async fn call_tool(
+    client: &Client,
+    server_url: &str,
+    tool_name: &str,
+    arguments: &Value,
+) -> String {
     let body = json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -233,8 +259,14 @@ pub async fn call_tool(client: &Client, server_url: &str, tool_name: &str, argum
             extract_content(&data["result"])
         }
         None => {
-            warn!("MCP: échec d'appel du tool {} sur {}", tool_name, server_url);
-            format!("Erreur : impossible d'appeler le tool {} sur {}", tool_name, server_url)
+            warn!(
+                "MCP: échec d'appel du tool {} sur {}",
+                tool_name, server_url
+            );
+            format!(
+                "Erreur : impossible d'appeler le tool {} sur {}",
+                tool_name, server_url
+            )
         }
     }
 }
@@ -262,12 +294,16 @@ fn extract_content(data: &Value) -> String {
             .collect::<Vec<_>>()
             .join("\n");
     }
-    if let Some(s) = data.as_str() { return s.to_string(); }
+    if let Some(s) = data.as_str() {
+        return s.to_string();
+    }
     data.to_string()
 }
 
 /// Transforme une URL en slug pour les noms de tools.
-pub fn server_slug(url: &str) -> String { slugify(url) }
+pub fn server_slug(url: &str) -> String {
+    slugify(url)
+}
 
 fn slugify(url: &str) -> String {
     url.trim_start_matches("https://")
