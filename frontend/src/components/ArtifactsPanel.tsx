@@ -1,4 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react';
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
+import React, { useState, useRef, useEffect, memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -12,7 +26,9 @@ import type { Artifact } from '../utils/artifacts';
 
 const WORD_MD_COMPONENTS = makeMdComponents(false);
 
-function WordDocBlock({ content, containerRef }: { content: string; containerRef: React.RefObject<HTMLDivElement> }) {
+// Mémoïsé : ne se re-rend que si le contenu du document change,
+// pas à chaque frappe dans le ChatInput.
+const WordDocBlock = memo(function WordDocBlock({ content, containerRef }: { content: string; containerRef: React.RefObject<HTMLDivElement> }) {
   return (
     <div className="artifact-word-preview bubble-markdown" ref={containerRef}>
       <ReactMarkdown
@@ -22,14 +38,50 @@ function WordDocBlock({ content, containerRef }: { content: string; containerRef
       >{normalizeHeadings(normalizeLatex(content))}</ReactMarkdown>
     </div>
   );
-}
+});
+
+// Mémoïsé : couvre les artefacts "réponse complète" et "tableau",
+// qui peuvent contenir des blocs ECharts/Mermaid coûteux à re-rendre.
+const FullContentBlock = memo(function FullContentBlock({ content }: { content: string }) {
+  return (
+    <div className="artifact-markdown bubble-markdown">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        components={ARTIFACT_MD_COMPONENTS}
+      >{normalizeHeadings(normalizeLatex(content))}</ReactMarkdown>
+    </div>
+  );
+});
+
+// Mémoïsé : le graphique ECharts ne se re-rend pas sur frappe dans le ChatInput.
+const EChartsArtifact = memo(function EChartsArtifact({
+  content, getImageRef,
+}: { content: string; getImageRef: React.MutableRefObject<(() => string) | null> }) {
+  return (
+    <div className="artifact-chart-wrap">
+      <EChartsBlock code={content} streaming={false} compact getImageRef={getImageRef} />
+    </div>
+  );
+});
+
+// Mémoïsé : le diagramme Mermaid ne se re-rend pas sur frappe dans le ChatInput.
+const MermaidArtifact = memo(function MermaidArtifact({ content }: { content: string }) {
+  return (
+    <div className="artifact-chart-wrap">
+      <MermaidBlock code={content} streaming={false} />
+    </div>
+  );
+});
 
 interface ArtifactsPanelProps {
   artifacts: Artifact[];
   onClose: () => void;
 }
 
-export function ArtifactsPanel({ artifacts, onClose }: ArtifactsPanelProps) {
+// Mémoïsé : ne se re-rend que si artifacts ou onClose changent,
+// pas à chaque frappe dans le ChatInput.
+export const ArtifactsPanel = memo(function ArtifactsPanel({ artifacts, onClose }: ArtifactsPanelProps) {
   const [activeId, setActiveId]       = useState(artifacts[0]?.id);
   const [listOpen, setListOpen]       = useState(false);
   const [copied, setCopied]           = useState(false);
@@ -39,14 +91,17 @@ export function ArtifactsPanel({ artifacts, onClose }: ArtifactsPanelProps) {
   const wordPreviewRef = useRef<HTMLDivElement>(null);
   const { toast }      = useDialog();
 
-  const active = artifacts.find(a => a.id === activeId) || artifacts[0];
+  const active = useMemo(
+    () => artifacts.find(a => a.id === activeId) || artifacts[0],
+    [artifacts, activeId],
+  );
 
   useEffect(() => {
     const stillExists = artifacts.some(a => a.id === activeId);
     if (!stillExists) setActiveId(artifacts[0]?.id);
   }, [artifacts, activeId]);
 
-  /* ── Copy ── */
+  /* ── Copie ── */
   const handleCopy = async () => {
     if (!active) return;
     let ok = false;
@@ -70,7 +125,7 @@ export function ArtifactsPanel({ artifacts, onClose }: ArtifactsPanelProps) {
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
-  /* ── Download Word ── */
+  /* ── Télécharger Word ── */
   const handleDownloadWord = async () => {
     if (!active || active.type !== 'word') return;
     setDownloading(true);
@@ -89,7 +144,7 @@ export function ArtifactsPanel({ artifacts, onClose }: ArtifactsPanelProps) {
     }
   };
 
-  /* ── Resize drag ── */
+  /* ── Redimensionnement ── */
   const isDragging = useRef(false);
   const startX     = useRef(0);
   const startW     = useRef(0);
@@ -179,27 +234,17 @@ export function ArtifactsPanel({ artifacts, onClose }: ArtifactsPanelProps) {
         </div>
       </div>
 
-      <div className="artifacts-content" key={active.id}>
+      <div className="artifacts-content">
         {active.type === 'chart' ? (
-          <div className="artifact-chart-wrap">
-            <EChartsBlock code={active.content} streaming={false} compact getImageRef={getImageRef} />
-          </div>
+          <EChartsArtifact content={active.content} getImageRef={getImageRef} />
         ) : active.type === 'mermaid' ? (
-          <div className="artifact-chart-wrap">
-            <MermaidBlock code={active.content} streaming={false} />
-          </div>
+          <MermaidArtifact content={active.content} />
         ) : active.type === 'word' ? (
           <WordDocBlock content={active.content} containerRef={wordPreviewRef} />
         ) : (
-          <div className="artifact-markdown bubble-markdown">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm, remarkMath]}
-              rehypePlugins={[rehypeKatex]}
-              components={ARTIFACT_MD_COMPONENTS}
-            >{normalizeHeadings(normalizeLatex(active.content))}</ReactMarkdown>
-          </div>
+          <FullContentBlock content={active.content} />
         )}
       </div>
     </aside>
   );
-}
+});

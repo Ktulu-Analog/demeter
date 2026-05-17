@@ -38,6 +38,30 @@ interface MessageProps {
   loading: boolean;
 }
 
+/**
+ * Extrait le titre d'un bloc ```word``` :
+ * 1. Texte inline après ```word sur la même ligne
+ * 2. Premier titre # dans le corps du bloc
+ * 3. Retourne null si aucun bloc word trouvé
+ */
+function extractWordTitle(content: string): string | null {
+  const wordStart = content.indexOf('```word');
+  if (wordStart === -1) return null;
+
+  const titleStart = wordStart + 7;
+  const titleEnd = content.indexOf('\n', titleStart);
+  if (titleEnd === -1) return null;
+
+  const inlineTitle = content.slice(titleStart, titleEnd).trim();
+  if (inlineTitle) return inlineTitle;
+
+  const body = content.slice(titleEnd + 1);
+  const h1Match = body.match(/^#\s+(.+)/m);
+  if (h1Match) return h1Match[1].trim();
+
+  return null;
+}
+
 export const Message = memo(function Message({
   msg, msgIndex, onOpenArtifacts, onRegenerate, onEditResend, onStop, isLast, loading,
 }: MessageProps) {
@@ -47,6 +71,13 @@ export const Message = memo(function Message({
   const isUser = msg.role === 'user';
   const contentStr = typeof msg.content === 'string' ? msg.content : '';
   const showArtifactsBtn = !isUser && !msg.streaming && hasArtifacts(contentStr);
+
+  // Titre du document Word pour le texte d'accompagnement (null si pas de bloc word)
+  // Mémoïsé pour éviter de re-parser le contenu (potentiellement long) à chaque frappe dans le ChatInput
+  const wordTitle = useMemo(
+    () => !isUser && !msg.streaming ? extractWordTitle(contentStr) : null,
+    [isUser, msg.streaming, contentStr],
+  );
 
   const [editing, setEditing]   = useState(false);
   const [editText, setEditText] = useState('');
@@ -61,7 +92,9 @@ export const Message = memo(function Message({
 
   return (
     <div className={`message-row ${isUser ? 'user' : 'assistant'}`}>
-      {!isUser && <div className="avatar assistant-avatar">🌿</div>}
+      {!isUser && (
+        <div className="avatar assistant-avatar"><img src="/ico-demeter.png" alt="Demeter" className="assistant-avatar-img" /></div>
+      )}
       <div className={`bubble ${isUser ? 'bubble-user' : 'bubble-assistant'}`}>
 
         {/* Attachments */}
@@ -112,6 +145,13 @@ export const Message = memo(function Message({
                 </div>
               )
         }
+
+        {/* Texte d'accompagnement pour les documents Word */}
+        {wordTitle && !msg.streaming && (
+          <p className="bubble-word-intro">
+            Le document <strong>« {wordTitle} »</strong> a été généré et est disponible dans le panneau Artefacts. Vous pouvez le prévisualiser ou le télécharger en .docx.
+          </p>
+        )}
 
         {/* RAG Sources */}
         {!isUser && !msg.streaming && msg.ragSources && msg.ragSources.length > 0 && (

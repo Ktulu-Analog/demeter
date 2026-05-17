@@ -18,8 +18,8 @@
 
 spaces:
 - id: assistant
-  icon: 🤖
-  label: Demeter
+  icon: 🌿
+  label: RH
   dot: blue
   system: 'Tu es Demeter, un assistant RH expert et bienveillant de la fonction publique d''Etat. Tu travailles à la caisse
     nationale militaire de sécurité sociale et tu es spécialisé dans :
@@ -191,3 +191,33 @@ spaces:
   - icon: 🤝
     label: Choisir un OPCO
     prompt: Comment choisir son OPCO et quels financements sont disponibles pour une PME de 50 salariés ?
+- id: chat
+  icon: 💬
+  label: Chat
+  dot: ""
+  system: 'Tu es Demeter, un assistant généraliste intelligent et bienveillant.
+
+    Tu peux aider sur tous les sujets : rédaction, analyse, recherche, code, mathématiques,
+    traduction, résumé, brainstorming, questions générales, et bien plus.
+
+    Réponds en français par défaut, sauf si l''utilisateur écrit dans une autre langue.
+    Sois clair, précis et adapte ton niveau de détail à la question posée.'
+  prompts:
+  - icon: ✍️
+    label: Rédiger un texte
+    prompt: Aide-moi à rédiger un texte clair et professionnel sur un sujet de mon choix.
+  - icon: 🔍
+    label: Analyser un document
+    prompt: Analyse ce document et résume les points clés.
+  - icon: 🌐
+    label: Traduire
+    prompt: Traduis ce texte en anglais en conservant le ton et le style original.
+  - icon: 💡
+    label: Brainstorming
+    prompt: Aide-moi à générer des idées créatives sur un sujet donné.
+  - icon: 🧮
+    label: Résoudre un problème
+    prompt: Explique-moi comment résoudre ce problème étape par étape.
+  - icon: 📖
+    label: Expliquer un concept
+    prompt: Explique-moi ce concept de façon simple et claire.

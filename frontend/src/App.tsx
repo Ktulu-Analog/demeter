@@ -1,8 +1,22 @@
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import './App.css';
 import { DialogProvider, useDialog } from './DialogContext';
 import { useSpaces, useConversations } from './hooks/index';
-import type { Conversation } from './hooks/index';
+import type { Conversation, Space } from './hooks/index';
 
 type LoadableConversation = { id: string; title: string; messages: ChatMessage[]; space_id?: string | null };
 import { genId } from './utils/text';
@@ -16,7 +30,7 @@ import { PromptsEditorModal } from './components/PromptsEditorModal';
 import { IngestionModal } from './components/IngestionModal';
 import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
 
-const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', mcp_servers: [] };
+const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', tavily_key: '', mcp_servers: [] };
 
 export default function App() {
   return (
@@ -43,12 +57,27 @@ function AppInner() {
   const { conversations, saveConversation, deleteConversation } = useConversations();
 
   const [settings, setSettings] = useState<Settings>(() => {
-    try { return JSON.parse(localStorage.getItem('demeter_settings') || '{}') || DEFAULT_SETTINGS; }
-    catch { return DEFAULT_SETTINGS; }
+    try {
+      const saved = JSON.parse(localStorage.getItem('demeter_settings') || '{}');
+      return { ...DEFAULT_SETTINGS, ...saved };
+    } catch { return DEFAULT_SETTINGS; }
   });
-  const saveSettings = (s: Settings) => { setSettings(s); localStorage.setItem('demeter_settings', JSON.stringify(s)); };
+  const initCredentials = (s: Settings) => {
+    (window as any).__TAURI__?.core?.invoke('init_credentials', {
+      payload: { endpoint: s.endpoint, bearer: s.bearer, tavily_key: s.tavily_key || '' }
+    })?.catch(console.error);
+  };
+
+  const saveSettings = (s: Settings) => {
+    setSettings(s);
+    localStorage.setItem('demeter_settings', JSON.stringify(s));
+    initCredentials(s);
+  };
 
   const [showSettings,      setShowSettings]      = useState(!settings.endpoint);
+
+  // Initialise AppState Rust dès le démarrage via IPC Tauri (pas HTTP)
+  useEffect(() => { initCredentials(settings); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [showMcpStatus,     setShowMcpStatus]      = useState(false);
   const [showIngestion,     setShowIngestion]      = useState(false);
   const [showPromptsEditor, setShowPromptsEditor]  = useState(false);
@@ -66,7 +95,7 @@ function AppInner() {
   };
 
   const [messages,      setMessages]      = useState<ChatMessage[]>([]);
-  const [input,         setInput]         = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null); // non-contrôlé : évite de re-rendre App sur chaque frappe
   const [loading,       setLoading]       = useState(false);
   const [activeSpaceId, setActiveSpaceId] = useState<string | null>(null);
   const [attachments,   setAttachments]   = useState<Attachment[]>([]);
@@ -91,7 +120,6 @@ function AppInner() {
 
   const abortControllerRef  = useRef<AbortController | null>(null);
   const chatEndRef          = useRef<HTMLDivElement>(null);
-  const textareaRef         = useRef<HTMLTextAreaElement>(null);
   const fileInputRef        = useRef<HTMLInputElement>(null);
   const currentConvIdRef    = useRef(currentConvId);
   const currentConvTitleRef = useRef(currentConvTitle);
@@ -113,6 +141,31 @@ function AppInner() {
     if (!loadingSpaces && spaces.length && activeSpaceId === null) setActiveSpaceId(spaces[0].id);
   }, [loadingSpaces, spaces, activeSpaceId]);
 
+  // Intercepte tous les clics sur liens externes et les ouvre via le shell Tauri
+  // (la webview Tauri n'ouvre pas les liens target="_blank" nativement)
+  // Utilise window.__TAURI__ injecté globalement (withGlobalTauri: true dans tauri.conf.json)
+  useEffect(() => {
+    const handleLinkClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const anchor = target.closest('a') as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const href = anchor.getAttribute('href');
+      if (!href || href.startsWith('#') || href.startsWith('javascript')) return;
+      if (/^https?:\/\//.test(href) || /^mailto:/.test(href)) {
+        e.preventDefault();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const tauri = (window as any).__TAURI__;
+        if (tauri?.shell?.open) {
+          tauri.shell.open(href).catch(console.error);
+        } else if (tauri?.opener?.open) {
+          tauri.opener.open(href).catch(console.error);
+        }
+      }
+    };
+    document.addEventListener('click', handleLinkClick, true);
+    return () => document.removeEventListener('click', handleLinkClick, true);
+  }, []);
+
   useEffect(() => {
     const lastIdx = [...messages].map((m, i) => m.role === 'assistant' ? i : -1).filter(i => i >= 0).pop();
     if (lastIdx === undefined) return;
@@ -132,7 +185,7 @@ function AppInner() {
 
   useEffect(() => {
     if (!settings.endpoint || !settings.bearer) return;
-    fetch(`${API_BASE}/api-proxy/api/models?endpoint=${encodeURIComponent(settings.endpoint)}&bearer=${encodeURIComponent(settings.bearer)}`)
+    fetch(`${API_BASE}/api-proxy/api/models?endpoint=${encodeURIComponent(settings.endpoint)}`)
       .then(r => r.ok ? r.json() : null)
       .then((data: { data?: { id: string }[] } | null) => {
         const ids = data?.data?.map(m => m.id).filter(Boolean) || [];
@@ -143,13 +196,13 @@ function AppInner() {
 
   useEffect(() => {
     if (!settings.endpoint || !settings.bearer) { setCurrentUser(null); return; }
-    fetch(`${API_BASE}/api-proxy/api/users/me?endpoint=${encodeURIComponent(settings.endpoint)}&bearer=${encodeURIComponent(settings.bearer)}`)
+    fetch(`${API_BASE}/api-proxy/api/users/me?endpoint=${encodeURIComponent(settings.endpoint)}`)
       .then(r => r.ok ? r.json() : null).then(setCurrentUser).catch(() => setCurrentUser(null));
   }, [settings.endpoint, settings.bearer]);
 
   useEffect(() => {
     if (!settings.endpoint || !settings.bearer) return;
-    fetch(`${API_BASE}/api-proxy/api/ingestion/collections?endpoint=${encodeURIComponent(settings.endpoint)}&bearer=${encodeURIComponent(settings.bearer)}`)
+    fetch(`${API_BASE}/api-proxy/api/ingestion/collections?endpoint=${encodeURIComponent(settings.endpoint)}`)
       .then(r => r.ok ? r.json() : null)
       .then((data: { data?: { id: number; name: string }[] } | null) => {
         if (!data?.data) return;
@@ -209,7 +262,7 @@ function AppInner() {
           try {
             const res = await fetch(`${API_BASE}/api-proxy/api/generate-title`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ first_user: firstUserStr.slice(0, 400), first_assistant: firstAssistStr.slice(0, 400), model: cfg.model, endpoint: cfg.endpoint, bearer: cfg.bearer }),
+              body: JSON.stringify({ first_user: firstUserStr.slice(0, 400), first_assistant: firstAssistStr.slice(0, 400), model: cfg.model }),
             });
             convTitle = res.ok ? ((await res.json()).title || fallbackTitle) : fallbackTitle;
           } catch { convTitle = fallbackTitle; }
@@ -227,7 +280,7 @@ function AppInner() {
   }, [messages]); // eslint-disable-line
 
   const autoResize = () => {
-    const el = textareaRef.current;
+    const el = inputRef.current;
     if (!el) return;
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 120) + 'px';
@@ -310,16 +363,16 @@ function AppInner() {
   const stopStreaming = useCallback(() => { if (abortControllerRef.current) { abortControllerRef.current.abort(); abortControllerRef.current = null; } }, []);
 
   const newConversation = () => {
-    setMessages([]); setInput(''); setAttachments([]); setArtifactsMsgIndex(null);
+    setMessages([]); if (inputRef.current) inputRef.current.value = ''; setAttachments([]); setArtifactsMsgIndex(null);
     setCurrentConvId(genId()); setCurrentConvTitle(null); titleGeneratedRef.current = false;
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (inputRef.current) inputRef.current.style.height = 'auto';
   };
   const switchSpace = (spaceId: string) => { setActiveSpaceId(spaceId); newConversation(); };
   const loadConversation = (conv: { id: string; title: string; messages: ChatMessage[]; space_id?: string | null }) => {
     setMessages(conv.messages || []); setCurrentConvId(conv.id); setCurrentConvTitle(conv.title);
-    titleGeneratedRef.current = true; setArtifactsMsgIndex(null); setInput(''); setAttachments([]);
+    titleGeneratedRef.current = true; setArtifactsMsgIndex(null); if (inputRef.current) inputRef.current.value = ''; setAttachments([]);
     if (conv.space_id) setActiveSpaceId(conv.space_id);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (inputRef.current) inputRef.current.style.height = 'auto';
   };
 
   const _dispatchChat = useCallback(async ({ historyForApi }: { historyForApi: { role: string; content: unknown }[] }) => {
@@ -338,7 +391,7 @@ function AppInner() {
       }
       const res = await fetch(`${API_BASE}/api-proxy/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ messages: historyForApi, model: modelForRequest, endpoint: settings.endpoint, bearer: settings.bearer, stream: true, space_id: activeSpace?.id || null, web_search: webSearch, tavily_key: settings.tavily_key || '', mcp_servers: settings.mcp_servers || [], ...(assignedColId ? { collection_id: assignedColId } : {}) }),
+        body: JSON.stringify({ messages: historyForApi, model: modelForRequest, stream: true, space_id: activeSpace?.id || null, web_search: webSearch, mcp_servers: settings.mcp_servers || [], ...(assignedColId ? { collection_id: assignedColId } : {}) }),
       });
       if (!res.ok) { throw new Error(`Erreur ${res.status} : ${await res.text()}`); }
       const reader = res.body!.getReader(); const decoder = new TextDecoder();
@@ -379,7 +432,7 @@ function AppInner() {
   }, [settings, activeModel, availableModels, activeSpace, webSearch]);
 
   const sendMessage = useCallback(async (text?: string) => {
-    const userText = (text || input).trim();
+    const userText = (text || inputRef.current?.value || '').trim();
     if ((!userText && !attachments.length) || loading) return;
     if (!configured) { setShowSettings(true); return; }
     let fullContent: ChatMessage['content'], displayContent: string;
@@ -402,10 +455,10 @@ function AppInner() {
     const userMsg: ChatMessage = { role: 'user', content: fullContent, displayContent, attachments: msgAttachments };
     const historyForApi = [...messages, { role: 'user', content: fullContent }];
     setMessages(prev => [...prev, userMsg, { role: 'assistant', content: '', streaming: true }]);
-    setInput(''); setAttachments([]);
-    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    if (inputRef.current) { inputRef.current.value = ''; autoResize(); } setAttachments([]);
+    if (inputRef.current) inputRef.current.style.height = 'auto';
     await _dispatchChat({ historyForApi });
-  }, [input, messages, loading, attachments, configured, _dispatchChat]);
+  }, [messages, loading, attachments, configured, _dispatchChat]);
 
   const regenerateMessage = useCallback(async (assistantMsgIndex: number) => {
     if (loading) return;
@@ -432,6 +485,8 @@ function AppInner() {
       : [],
     [activeArtifactsContent, artifactsMsgIndex],
   );
+  const closeArtifacts = useCallback(() => setArtifactsMsgIndex(null), []);
+
   const lastArtifactsMsgIndex = (() => {
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
@@ -449,7 +504,7 @@ function AppInner() {
       {showAbout         && <AboutModal onClose={() => setShowAbout(false)} />}
 
       <aside className={`sidebar${sidebarOpen ? '' : ' sidebar--closed'}`}>
-        <div className="sidebar-logo"><div className="brand-wrap"><span className="brand-leaf">🌿</span><div><div className="brand">Demeter</div><div className="tagline">Assistant RH intelligent</div></div></div></div>
+        <div className="sidebar-logo"><div className="brand-wrap"><div><div className="brand">Demeter</div><div className="tagline">Assistant RH intelligent</div></div></div></div>
         <button className="new-conv-btn" onClick={newConversation}>
           <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13"><path d="M8 2a1 1 0 011 1v4h4a1 1 0 110 2H9v4a1 1 0 11-2 0V9H3a1 1 0 110-2h4V3a1 1 0 011-1z"/></svg>
           Nouvelle conversation
@@ -567,7 +622,7 @@ function AppInner() {
             <div className="chat-area">
               {messages.length === 0 && (
                 <div className="welcome">
-                  <div className="welcome-logo"><span className="welcome-leaf">{(activeSpace as { icon?: string })?.icon || '🌿'}</span></div>
+                  <div className="welcome-logo"><img src="/ico-demeter.png" alt="Demeter" className="welcome-logo-img" /></div>
                   <h2 className="welcome-title">{activeSpace ? (activeSpace as { label?: string }).label : 'Bonjour\u00a0!'}</h2>
                   <p className="welcome-sub">
                     {activeSpace ? 'Espace dédié — posez vos questions ou choisissez une suggestion ci-dessous.' : 'Votre assistant RH intelligent.'}<br />
@@ -625,9 +680,9 @@ function AppInner() {
                     ))}
                   </div>
                 )}
-                <textarea ref={textareaRef} className="chat-input"
+                <textarea ref={inputRef} className="chat-input"
                   placeholder={extracting ? 'Extraction en cours…' : attachments.length === 1 ? `Message à propos de "${attachments[0].filename}"…` : attachments.length > 1 ? `Message à propos de ${attachments.length} documents…` : configured ? `Posez votre question — ${(activeSpace as { label?: string })?.label || 'Assistant RH'}…` : "⚙ Configurez l'endpoint d'abord…"}
-                  value={input} onChange={e => { setInput(e.target.value); autoResize(); }} onKeyDown={handleKey} onPaste={handlePaste} disabled={loading || extracting} rows={3}
+                  onChange={autoResize} onKeyDown={handleKey} onPaste={handlePaste} disabled={loading || extracting} rows={3}
                 />
                 <div className="input-toolbar">
                   <button className={`attach-btn ${extracting ? 'attach-btn--loading' : ''} ${attachments.length ? 'attach-btn--active' : ''}`} onClick={() => fileInputRef.current?.click()} disabled={loading || extracting}>
@@ -643,7 +698,7 @@ function AppInner() {
                     </button>
                   )}
                   <span className="input-hint">Shift+Entrée pour sauter une ligne</span>
-                  <button className="send-btn" onClick={() => sendMessage()} disabled={loading || extracting || (!input.trim() && !attachments.length)}>
+                  <button className="send-btn" onClick={() => sendMessage()} disabled={loading || extracting || (!(inputRef.current?.value?.trim()) && !attachments.length)}>
                     {loading ? <span className="spinner" /> : <svg viewBox="0 0 16 16"><path d="M2 8l12-6-4 6 4 6z"/></svg>}
                   </button>
                 </div>
@@ -652,7 +707,7 @@ function AppInner() {
           </div>
 
           {artifactsOpen && activeArtifacts.length > 0 && (
-            <ArtifactsPanel artifacts={activeArtifacts} onClose={() => setArtifactsMsgIndex(null)} />
+            <ArtifactsPanel artifacts={activeArtifacts} onClose={closeArtifacts} />
           )}
         </div>
       </main>

@@ -1,3 +1,17 @@
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 import type { EChartsOption } from 'echarts';
 
 /**
@@ -22,7 +36,7 @@ export function normalizeLatex(text: string): string {
  */
 export function normalizeHeadings(text: string): string {
   if (!text) return text;
-  return text.replace(/^(#{1,6}\s*)([0-9]️⃣|🔟|[①②③④⑤⑥⑦⑧⑨⑩]|[❶-❿])?\s*/gm, '$1');
+  return text.replace(/^(#{1,6}\s*)([0-9]\uFE0F?\u20E3|🔟|[①②③④⑤⑥⑦⑧⑨⑩]|[❶-❿])?\s*/gm, '$1');
 }
 
 /**
@@ -91,9 +105,9 @@ export function markdownToWordHtml(md: string): string {
   const TEXT_SECONDARY = '#555555';
   const BG_SECONDARY   = '#f4f4f4';
 
-  let text = md.replace(/^(#{1,6}\s*)([0-9]️⃣|🔟|[①-⑩]|[❶-❿])?\s*/gm, '$1');
+  let text = md.replace(/^(#{1,6}\s*)([0-9]\uFE0F?\u20E3|🔟|[①-⑩]|[❶-❿])?\s*/gm, '$1');
 
-  // Fenced code blocks
+  // Blocs de code délimités
   text = text.replace(/```[\w]*\n([\s\S]*?)```/g,
     `<pre style="background:#f4f4f4;border:1px solid rgba(0,0,0,0.1);border-radius:4px;padding:10px 14px;font-family:Consolas,monospace;font-size:10pt;margin:10px 0;overflow-x:auto">$1</pre>`);
 
@@ -110,14 +124,14 @@ export function markdownToWordHtml(md: string): string {
     return `<table style="border-collapse:collapse;width:100%;font-family:Calibri,sans-serif;margin:14px 0;border:1px solid rgba(0,0,0,0.16);border-radius:4px"><thead style="background:${BG_SECONDARY}">${toTh(head)}</thead><tbody>${body.map((r, i) => toTd(r, i % 2 === 1)).join('')}</tbody></table>`;
   });
 
-  // Headings
+  // Headings utilisés dans Word
   text = text
     .replace(/^#### (.+)$/gm, `<h4 style="font-family:'Sora',Calibri,sans-serif;font-size:11pt;font-weight:600;color:${TEXT_SECONDARY};margin:12px 0 4px">$1</h4>`)
     .replace(/^### (.+)$/gm,  `<h3 style="font-family:'Sora',Calibri,sans-serif;font-size:10.5pt;font-weight:600;color:${TEXT_SECONDARY};text-transform:uppercase;letter-spacing:0.6px;margin:16px 0 6px">$1</h3>`)
     .replace(/^## (.+)$/gm,   `<h2 style="font-family:'Sora',Calibri,sans-serif;font-size:12.5pt;font-weight:600;color:${TEXT_PRIMARY};background:${BG_SECONDARY};border-left:3px solid ${TEXT_PRIMARY};padding:5px 10px;margin:20px 0 8px;border-radius:0 4px 4px 0">$1</h2>`)
     .replace(/^# (.+)$/gm,    `<h1 style="font-family:'Sora',Calibri,sans-serif;font-size:14pt;font-weight:700;color:${TEXT_PRIMARY};border-bottom:1px solid rgba(0,0,0,0.2);padding-bottom:6px;margin:24px 0 10px">$1</h1>`);
 
-  // Inline formatting
+  // Formatage en ligne
   text = text
     .replace(/\*\*(.+?)\*\*/g, `<strong style="font-weight:600">$1</strong>`)
     .replace(/\*(.+?)\*/g,     `<em style="color:${TEXT_SECONDARY}">$1</em>`)
@@ -127,7 +141,7 @@ export function markdownToWordHtml(md: string): string {
   text = text.replace(/^> (.+)$/gm,
     `<blockquote style="border-left:3px solid rgba(0,0,0,0.2);margin:10px 0;padding:8px 14px;background:${BG_SECONDARY};color:${TEXT_SECONDARY};font-style:italic;border-radius:0 4px 4px 0">$1</blockquote>`);
 
-  // Lists
+  // Listes
   text = text.replace(/^[*\-] (.+)$/gm, `<li style="margin-bottom:4px;padding-left:4px;line-height:1.65">$1</li>`);
   text = text.replace(/(<li[^>]*>.*<\/li>\n?)+/g, m => `<ul style="margin:6px 0 12px;padding-left:20px;list-style:disc">${m}</ul>`);
   text = text.replace(/^\d+\. (.+)$/gm, `<li style="margin-bottom:4px;line-height:1.65">$1</li>`);
@@ -135,7 +149,7 @@ export function markdownToWordHtml(md: string): string {
   // HR
   text = text.replace(/^---+$/gm, `<hr style="border:none;border-top:1px solid rgba(0,0,0,0.12);margin:16px 0">`);
 
-  // Paragraphs
+  // Paragraphes
   text = text
     .replace(/\n\n+/g, `</p><p style="margin:0 0 10px;line-height:1.75">`)
     .replace(/\n/g, '<br>');

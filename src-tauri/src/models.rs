@@ -1,3 +1,17 @@
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -21,16 +35,12 @@ pub struct Message {
 pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub model: String,
-    pub endpoint: String,
-    pub bearer: String,
     #[serde(default = "default_true")]
     pub stream: bool,
     pub space_id: Option<String>,
     pub collection_id: Option<i64>,
     #[serde(default)]
     pub web_search: bool,
-    #[serde(default)]
-    pub tavily_key: String,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
 }
@@ -40,8 +50,6 @@ pub struct TitleRequest {
     pub first_user: String,
     pub first_assistant: String,
     pub model: String,
-    pub endpoint: String,
-    pub bearer: String,
 }
 
 // ── Conversations ─────────────────────────────────────────────────────────────
@@ -119,23 +127,11 @@ pub struct CollectionCreateRequest {
     pub description: String,
     #[serde(default = "default_private")]
     pub visibility: String,
-    pub endpoint: String,
-    pub bearer: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CollectionRenameRequest {
     pub name: String,
-    pub endpoint: String,
-    pub bearer: String,
-}
-
-// ── Query params ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct EndpointBearerParams {
-    pub endpoint: String,
-    pub bearer: String,
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

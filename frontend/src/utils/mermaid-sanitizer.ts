@@ -1,10 +1,24 @@
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 /**
  * Corrige automatiquement les erreurs de syntaxe Mermaid les plus fréquentes générées par les LLMs.
  */
 export function sanitizeMermaid(raw: string): string {
   let code = raw.trim();
 
-  // 0. Détection et conversion C4 (retiré en Mermaid v11)
+  // Détection et conversion C4 (retiré en Mermaid v11)
   if (/^C4\w*/i.test(code)) {
     const accentC4: Record<string, string> = { 'é': 'e', 'è': 'e', 'ê': 'e', 'ë': 'e', 'à': 'a', 'â': 'a', 'ä': 'a', 'ù': 'u', 'û': 'u', 'ü': 'u', 'ô': 'o', 'ö': 'o', 'î': 'i', 'ï': 'i', 'ç': 'c', 'É': 'E', 'È': 'E', 'À': 'A', 'Î': 'I', 'Ç': 'C' };
     const trlC4 = (s: string) => s.split('').map(c => accentC4[c] || c).join('').replace(/'/g, ' ').replace(/"/g, ' ');
@@ -32,23 +46,23 @@ export function sanitizeMermaid(raw: string): string {
     return out.trim();
   }
 
-  // 1. Normalise les fins de ligne
+  // Normalise les fins de ligne
   code = code.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // 2. Tabulations → 4 espaces
+  // Tabulations → 4 espaces
   code = code.replace(/\t/g, '    ');
 
-  // 3. Caractères problématiques globaux
+  // Caractères problématiques globaux
   code = code.replace(/[\u2018\u2019\u201A\u201B`]/g, ' ');
   code = code.replace(/[\u2011\u2013\u2014\u2015\u2212]/g, '-');
 
-  // 4. Supprime classDef / click / linkStyle / style inline
+  // Supprime classDef / click / linkStyle / style inline
   code = code.replace(/^\s*(classDef|click|linkStyle|style\s+\w)\s.*$/gm, '');
 
-  // 5. Supprime les commentaires %%
+  // Supprime les commentaires %%
   code = code.replace(/^\s*%%.*$/gm, '');
 
-  // ── Corrections flowchart / graph ──
+  // Corrections flowchart / graph
   const isFlowchart = /^(graph|flowchart)\s/i.test(code);
   if (isFlowchart) {
     code = code.replace(/-->>/g, '-->');
@@ -85,7 +99,7 @@ export function sanitizeMermaid(raw: string): string {
     });
   }
 
-  // ── Corrections gantt ──
+  // Corrections gantt
   const isGantt = /^gantt\b/i.test(code);
   if (isGantt) {
     const accentMapGantt: Record<string, string> = {
@@ -101,7 +115,7 @@ export function sanitizeMermaid(raw: string): string {
     });
   }
 
-  // ── Corrections sequenceDiagram ──
+  // Corrections sequenceDiagram
   const isSequence = /^sequenceDiagram/i.test(code);
   if (isSequence) {
     code = code.replace(/^\s*subgraph\s.*$/gm, '');
@@ -120,7 +134,7 @@ export function sanitizeMermaid(raw: string): string {
     }
   }
 
-  // 11. Nettoyage final
+  // Nettoyage final
   code = code.replace(/[ \t]+$/gm, '');
   code = code.replace(/\n{3,}/g, '\n\n');
 

@@ -1,3 +1,17 @@
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -30,7 +44,7 @@ interface DialogContextValue {
   confirm: (message: string, options?: ConfirmOptions) => Promise<boolean>;
 }
 
-// ── Context ───────────────────────────────────────────────────────────────────
+// ── Contexte ───────────────────────────────────────────────────────────────────
 const DialogContext = createContext<DialogContextValue | null>(null);
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -40,7 +54,7 @@ export function useDialog(): DialogContextValue {
   return ctx;
 }
 
-// ── Toast Component ───────────────────────────────────────────────────────────
+// ── Composant toast  ───────────────────────────────────────────────────────────
 function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) => void }) {
   useEffect(() => {
     const t = setTimeout(() => onRemove(toast.id), toast.duration || 6000);
@@ -61,7 +75,7 @@ function ToastItem({ toast, onRemove }: { toast: Toast; onRemove: (id: string) =
   );
 }
 
-// ── Confirm Dialog Component ──────────────────────────────────────────────────
+// ── Composant confirmation (dialogue) ──────────────────────────────────────────────────
 function ConfirmDialogComponent({ dialog, onResolve }: { dialog: ConfirmDialog; onResolve: (id: string, result: boolean) => void }) {
   const handleKey = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onResolve(dialog.id, false);
@@ -107,7 +121,6 @@ function ConfirmDialogComponent({ dialog, onResolve }: { dialog: ConfirmDialog; 
   );
 }
 
-// ── Provider ──────────────────────────────────────────────────────────────────
 let _idCounter = 0;
 const nextId = () => `dlg_${++_idCounter}`;
 

@@ -1,3 +1,17 @@
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { API_BASE, ACCEPTED_DOC_EXTS } from '../constants';
 import { useDialog } from '../DialogContext';
@@ -86,7 +100,7 @@ TOKEN="${bearer}"
 COLLECTION_ID=${colId}
 CHUNK_SIZE=${chunkSize}
 CHUNK_OVERLAP=${chunkOverlap}
-DOSSIER="./mes_documents"   # ← chemin à adapter
+DOSSIER="./mes_documents"   # ← chemin à adapter si besoin
 
 find "$DOSSIER" -type f \\( -name "*.pdf" -o -name "*.docx" \\
   -o -name "*.txt" -o -name "*.md" \\) | while read -r fichier; do
@@ -209,7 +223,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
     if (!settings.endpoint || !settings.bearer) return;
     setLoadingCollections(true);
     try {
-      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections?endpoint=${encodeURIComponent(settings.endpoint)}&bearer=${encodeURIComponent(settings.bearer)}`);
+      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections?endpoint=${encodeURIComponent(settings.endpoint)}`);
       if (!res.ok) throw new Error(await res.text());
       const data: { data?: Collection[] } = await res.json();
       const sorted = (data.data || []).sort((a, b) => (a.visibility === 'private' ? 0 : 1) - (b.visibility === 'private' ? 0 : 1));
@@ -240,7 +254,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
     try {
       const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: selectedSpaceId, description: `Base documentaire — ${selectedSpace?.label || selectedSpaceId}`, visibility: newCollectionVisibility, endpoint: settings.endpoint, bearer: settings.bearer }),
+        body: JSON.stringify({ name: selectedSpaceId, description: `Base documentaire — ${selectedSpace?.label || selectedSpaceId}`, visibility: newCollectionVisibility }),
       });
       if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(e.detail || res.statusText); }
       showToast(`Collection "${selectedSpaceId}" créée avec succès !`);
@@ -257,7 +271,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
     if (!ok) return;
     setDeleting(colId);
     try {
-      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections/${colId}?endpoint=${encodeURIComponent(settings.endpoint)}&bearer=${encodeURIComponent(settings.bearer)}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections/${colId}?endpoint=${encodeURIComponent(settings.endpoint)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       showToast(`Collection "${colName}" supprimée.`);
       setDocuments(d => { const nd = { ...d }; delete nd[colId]; return nd; });
@@ -276,7 +290,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
     try {
       const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections/${colId}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim(), endpoint: settings.endpoint, bearer: settings.bearer }),
+        body: JSON.stringify({ name: newName.trim() }),
       });
       if (!res.ok) { const err = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(err.detail || res.statusText); }
       showToast(`Collection renommée en "${newName.trim()}".`);
@@ -290,7 +304,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
     if (expandedCollection === colId) { setExpandedCollection(null); return; }
     setExpandedCollection(colId); setLoadingDocs(colId);
     try {
-      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections/${colId}/documents?endpoint=${encodeURIComponent(settings.endpoint)}&bearer=${encodeURIComponent(settings.bearer)}`);
+      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections/${colId}/documents?endpoint=${encodeURIComponent(settings.endpoint)}`);
       if (!res.ok) throw new Error(await res.text());
       const data: { data?: Document[] } = await res.json();
       setDocuments(d => ({ ...d, [colId]: data.data || [] }));
@@ -306,7 +320,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
     if (!ok) return;
     setDeletingDoc(docId);
     try {
-      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/documents/${docId}?endpoint=${encodeURIComponent(settings.endpoint)}&bearer=${encodeURIComponent(settings.bearer)}`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/documents/${docId}?endpoint=${encodeURIComponent(settings.endpoint)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(await res.text());
       showToast('Document supprimé.');
       setDocuments(d => ({ ...d, [colId]: (d[colId] || []).filter(doc => doc.id !== docId) }));
@@ -326,7 +340,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
       setUploadProgress({ current: i + 1, total, currentName: file.name, ok, errors: errors.length });
       const fd = new FormData();
       fd.append('file', file); fd.append('collection_id', String(matchingCollection.id));
-      fd.append('endpoint', settings.endpoint); fd.append('bearer', settings.bearer);
+      
       fd.append('chunk_size', String(chunkSize)); fd.append('chunk_overlap', String(chunkOverlap));
       try {
         const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/upload`, { method: 'POST', body: fd });

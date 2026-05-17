@@ -1,14 +1,24 @@
-//! Client MCP — transport HTTP Streamable (spec 2025-03-26)
-//!
-//! Compatible avec mcp.data.gouv.fr et tout serveur FastMCP en mode stateless_http.
-//!
-//! Une seule requête POST par appel. Headers obligatoires :
-//!   Content-Type: application/json
-//!   Accept: application/json, text/event-stream   ← les DEUX ensemble, obligatoire
-//!   Origin: {scheme}://{host}                     ← obligatoire (anti-DNS-rebinding)
-//!
-//! Pas de session, pas de initialize préalable (stateless=True côté serveur
-//! → _initialization_state = Initialized dès la première requête).
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+// Client MCP — transport HTTP Streamable (spec 2025-03-26)
+//
+// Compatible avec mcp.data.gouv.fr et tout serveur FastMCP en mode stateless_http.
+//
+// Une seule requête POST par appel. Headers obligatoires :
+//   Content-Type: application/json
+//   Accept: application/json, text/event-stream   ← les DEUX ensemble, obligatoire
+//   Origin: {scheme}://{host}                     ← obligatoire (anti-DNS-rebinding)
 
 use futures::StreamExt;
 use reqwest::Client;

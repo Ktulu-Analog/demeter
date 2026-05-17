@@ -1,5 +1,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
+
+use crate::config;
+
+/// Tronque une string UTF-8 à `max_bytes` octets sans couper un caractère multi-octet.
+fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    &s[..boundary]
+}
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
@@ -21,7 +36,7 @@ use crate::{
     models::*,
     rag::{
         build_system_with_rag, chunks_to_context, rerank_chunks,
-        retrieve_context, retrieve_context_with_chunks, search_chunks, albert_base,
+        retrieve_context_with_chunks, search_chunks, albert_base,
     },
     spaces::{load_spaces, save_spaces},
     web_search::fetch_web_search,
@@ -127,26 +142,36 @@ fn append_instructions(system: &str) -> String {
 
 // ── App state ─────────────────────────────────────────────────────────────────
 
+#[derive(Debug, Default, Clone)]
+pub struct Credentials {
+    pub endpoint:   String,
+    pub bearer:     String,
+    pub tavily_key: String,
+}
+
 #[derive(Clone)]
 pub struct AppState {
-    pub db: Database,
+    pub db:           Database,
     pub prompts_path: PathBuf,
+    pub credentials:  Arc<RwLock<Credentials>>,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-pub fn build_router(db: Database, prompts_path: PathBuf) -> Router {
-    let state = Arc::new(AppState { db, prompts_path });
+pub fn build_router(db: Database, prompts_path: PathBuf) -> (Router, Arc<AppState>) {
+    let credentials = Arc::new(RwLock::new(Credentials::default()));
+    let state = Arc::new(AppState { db, prompts_path, credentials });
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any);
 
-    Router::new()
+    let router = Router::new()
         // Spaces
         .route("/api/spaces", get(get_spaces))
         .route("/api/spaces", put(put_spaces))
+        .route("/api/spaces/reset", post(reset_spaces))
         // Chat
         .route("/api/chat", post(chat))
         .route("/api/generate-title", post(generate_title))
@@ -176,9 +201,10 @@ pub fn build_router(db: Database, prompts_path: PathBuf) -> Router {
         .route("/health", get(health))
         // Proxy for frontend (api-proxy prefix)
         .nest("/api-proxy", build_proxy_router(state.clone()))
-        .with_state(state)
+        .with_state(state.clone())
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
-        .layer(cors)
+        .layer(cors);
+    (router, state)
 }
 
 fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -186,6 +212,7 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/spaces", get(get_spaces))
         .route("/api/spaces", put(put_spaces))
+        .route("/api/spaces/reset", post(reset_spaces))
         .route("/api/chat", post(chat))
         .route("/api/generate-title", post(generate_title))
         .route("/api/rag/status", get(rag_status))
@@ -226,7 +253,7 @@ async fn image_proxy(Query(params): Query<ImageProxyParams>) -> Response {
     }
 
     let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(config::timeout_image_proxy())
         .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
         .build()
     {
@@ -317,15 +344,23 @@ async fn put_spaces(
     }
 }
 
+async fn reset_spaces(State(state): State<Arc<AppState>>) -> Response {
+    let default_yml = include_str!("../prompts.yml");
+    match std::fs::write(&state.prompts_path, default_yml) {
+        Ok(()) => Json(json!({"ok": true})).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 // ── RAG status ────────────────────────────────────────────────────────────────
 
 async fn rag_status() -> Json<Value> {
     Json(json!({
         "backend":        "albert-api",
-        "rerank_model":   std::env::var("RERANK_MODEL").unwrap_or_else(|_| "bge-reranker-v2-m3".to_string()),
-        "rag_top_k":      std::env::var("RAG_TOP_K").unwrap_or_else(|_| "20".to_string()),
-        "rag_top_rerank": std::env::var("RAG_TOP_RERANK").unwrap_or_else(|_| "5".to_string()),
-        "rag_min_score":  std::env::var("RAG_MIN_SCORE").unwrap_or_else(|_| "0.15".to_string()),
+        "rerank_model":   config::rerank_model(),
+        "rag_top_k":      config::rag_top_k().to_string(),
+        "rag_top_rerank": config::rag_top_rerank().to_string(),
+        "rag_min_score":  config::rag_min_score().to_string(),
         "info": "Les collections sont gérées directement par Albert.",
     }))
 }
@@ -336,6 +371,7 @@ async fn chat(
     State(state): State<Arc<AppState>>,
     Json(req): Json<ChatRequest>,
 ) -> Response {
+    let creds = state.credentials.read().await.clone();
     // Resolve system prompt
     let mut system_prompt = default_system();
     if let Some(ref space_id) = req.space_id {
@@ -367,8 +403,8 @@ async fn chat(
     let mut rag_chunks_used: Vec<crate::models::Chunk> = Vec::new();
     let rag_context = if let Some(ref query) = last_user {
         if let Some(cid) = req.collection_id {
-            let chunks = search_chunks(query, cid, &req.endpoint, &req.bearer).await;
-            let chunks = rerank_chunks(query, chunks, &req.endpoint, &req.bearer).await;
+            let chunks = search_chunks(query, cid, &creds.endpoint, &creds.bearer).await;
+            let chunks = rerank_chunks(query, chunks, &creds.endpoint, &creds.bearer).await;
             if !chunks.is_empty() {
                 let ctx = chunks_to_context(&chunks);
                 rag_chunks_used = chunks;
@@ -377,7 +413,7 @@ async fn chat(
                 None
             }
         } else if let Some(ref sid) = req.space_id {
-            match retrieve_context_with_chunks(query, sid, &req.endpoint, &req.bearer).await {
+            match retrieve_context_with_chunks(query, sid, &creds.endpoint, &creds.bearer).await {
                 Some((ctx, chunks)) => {
                     rag_chunks_used = chunks;
                     Some(ctx)
@@ -398,14 +434,14 @@ async fn chat(
     if req.web_search {
         if let Some(ref query) = last_user {
             info!("Web search triggered for: {:?}", query);
-            let web_ctx = fetch_web_search(query, 6, &req.tavily_key).await;
+            let web_ctx = fetch_web_search(query, 6, &creds.tavily_key).await;
             final_system.push_str("\n\n");
             final_system.push_str(&web_ctx);
         }
     }
 
     // Build LLM endpoint
-    let mut endpoint = req.endpoint.trim_end_matches('/').to_string();
+    let mut endpoint = creds.endpoint.trim_end_matches('/').to_string();
     if !endpoint.ends_with("/chat/completions") {
         endpoint.push_str("/chat/completions");
     }
@@ -416,7 +452,7 @@ async fn chat(
     }
 
     let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(config::timeout_llm_stream())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -441,20 +477,26 @@ async fn chat(
     // Si on a des tools MCP, on fait d'abord un appel non-streamé pour gérer les tool_calls
     if !mcp_tools.is_empty() {
         let mut loop_messages = messages_payload.clone();
-        const MAX_TURNS: usize = 5;
+        let max_turns = config::mcp_max_turns();
+        let sync_client = Client::builder()
+            .timeout(config::timeout_llm_sync())
+            .use_rustls_tls()
+            .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
+            .build()
+            .unwrap_or_default();
 
-        for turn in 0..MAX_TURNS {
+        for turn in 0..max_turns {
             let loop_payload = json!({
                 "model":      req.model,
                 "messages":   loop_messages,
                 "stream":     false,
-                "max_tokens": 100000,
+                "max_tokens": config::llm_max_tokens(),
                 "tools":      mcp_tools,
                 "tool_choice": "auto",
             });
 
-            let resp = match client.post(&endpoint)
-                .bearer_auth(&req.bearer)
+            let resp = match sync_client.post(&endpoint)
+                .bearer_auth(&creds.bearer)
                 .json(&loop_payload)
                 .send().await
             {
@@ -584,14 +626,14 @@ async fn chat(
         "model":      req.model,
         "messages":   messages_payload,
         "stream":     req.stream,
-        "max_tokens": 100000,
+        "max_tokens": config::llm_max_tokens(),
     });
 
     if req.stream {
         // Streaming SSE passthrough
         let resp = match client
             .post(&endpoint)
-            .bearer_auth(&req.bearer)
+            .bearer_auth(&creds.bearer)
             .json(&payload)
             .send()
             .await
@@ -656,7 +698,7 @@ async fn chat(
         // Non-streaming
         match client
             .post(&endpoint)
-            .bearer_auth(&req.bearer)
+            .bearer_auth(&creds.bearer)
             .json(&payload)
             .send()
             .await
@@ -681,7 +723,7 @@ struct McpListRequest {
 
 async fn mcp_list_tools(Json(req): Json<McpListRequest>) -> Response {
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(config::timeout_models())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -702,8 +744,12 @@ async fn mcp_list_tools(Json(req): Json<McpListRequest>) -> Response {
 
 // ── Generate title ────────────────────────────────────────────────────────────
 
-async fn generate_title(Json(req): Json<TitleRequest>) -> Response {
-    let mut endpoint = req.endpoint.trim_end_matches('/').to_string();
+async fn generate_title(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<TitleRequest>,
+) -> Response {
+    let creds = state.credentials.read().await.clone();
+    let mut endpoint = creds.endpoint.trim_end_matches('/').to_string();
     if !endpoint.ends_with("/chat/completions") {
         endpoint.push_str("/chat/completions");
     }
@@ -711,7 +757,7 @@ async fn generate_title(Json(req): Json<TitleRequest>) -> Response {
     let payload = json!({
         "model":  req.model,
         "stream": false,
-        "max_tokens": 20,
+        "max_tokens": config::title_max_tokens(),
         "messages": [
             {
                 "role": "system",
@@ -721,15 +767,15 @@ async fn generate_title(Json(req): Json<TitleRequest>) -> Response {
                 "role": "user",
                 "content": format!(
                     "Question : {}\nRéponse : {}\n\nGénère un titre court.",
-                    &req.first_user[..req.first_user.len().min(400)],
-                    &req.first_assistant[..req.first_assistant.len().min(400)],
+                    truncate_utf8(&req.first_user, config::title_truncate_user()),
+                    truncate_utf8(&req.first_assistant, config::title_truncate_assistant()),
                 ),
             },
         ],
     });
 
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(config::timeout_title())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -737,7 +783,7 @@ async fn generate_title(Json(req): Json<TitleRequest>) -> Response {
 
     match client
         .post(&endpoint)
-        .bearer_auth(&req.bearer)
+        .bearer_auth(&creds.bearer)
         .json(&payload)
         .send()
         .await
@@ -791,12 +837,23 @@ async fn delete_conversation(
     }
 }
 
+// ── Query params sans bearer ─────────────────────────────────────────────────
+
+#[derive(Debug, serde::Deserialize)]
+struct EndpointParams {
+    pub endpoint: String,
+}
+
 // ── User info ─────────────────────────────────────────────────────────────────
 
-async fn get_user_me(Query(params): Query<EndpointBearerParams>) -> Response {
+async fn get_user_me(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<EndpointParams>,
+) -> Response {
+    let creds = state.credentials.read().await.clone();
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(config::timeout_doc_resolve())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -804,7 +861,7 @@ async fn get_user_me(Query(params): Query<EndpointBearerParams>) -> Response {
 
     match client
         .get(format!("{}/me/info", base))
-        .bearer_auth(&params.bearer)
+        .bearer_auth(&creds.bearer)
         .send()
         .await
     {
@@ -820,10 +877,14 @@ async fn get_user_me(Query(params): Query<EndpointBearerParams>) -> Response {
 
 // ── Models ────────────────────────────────────────────────────────────────────
 
-async fn list_models(Query(params): Query<EndpointBearerParams>) -> Response {
+async fn list_models(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<EndpointParams>,
+) -> Response {
+    let creds = state.credentials.read().await.clone();
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(config::timeout_doc_resolve())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -831,7 +892,7 @@ async fn list_models(Query(params): Query<EndpointBearerParams>) -> Response {
 
     match client
         .get(format!("{}/models", base))
-        .bearer_auth(&params.bearer)
+        .bearer_auth(&creds.bearer)
         .send()
         .await
     {
@@ -916,10 +977,14 @@ async fn extract_multiple_files(mut multipart: Multipart) -> Response {
 
 // ── Ingestion ─────────────────────────────────────────────────────────────────
 
-async fn list_collections(Query(params): Query<EndpointBearerParams>) -> Response {
+async fn list_collections(
+    State(state): State<Arc<AppState>>,
+    Query(params): Query<EndpointParams>,
+) -> Response {
+    let creds = state.credentials.read().await.clone();
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(config::timeout_image_proxy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -928,7 +993,7 @@ async fn list_collections(Query(params): Query<EndpointBearerParams>) -> Respons
     match client
         .get(format!("{}/collections", base))
         .query(&[("limit", "100")])
-        .bearer_auth(&params.bearer)
+        .bearer_auth(&creds.bearer)
         .send()
         .await
     {
@@ -942,10 +1007,14 @@ async fn list_collections(Query(params): Query<EndpointBearerParams>) -> Respons
     }
 }
 
-async fn create_collection(Json(req): Json<CollectionCreateRequest>) -> Response {
-    let base = albert_base(&req.endpoint);
+async fn create_collection(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CollectionCreateRequest>,
+) -> Response {
+    let creds = state.credentials.read().await.clone();
+    let base = albert_base(&creds.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(config::timeout_image_proxy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -960,7 +1029,7 @@ async fn create_collection(Json(req): Json<CollectionCreateRequest>) -> Response
 
     match client
         .post(format!("{}/collections", base))
-        .bearer_auth(&req.bearer)
+        .bearer_auth(&creds.bearer)
         .json(&body)
         .send()
         .await
@@ -976,12 +1045,14 @@ async fn create_collection(Json(req): Json<CollectionCreateRequest>) -> Response
 }
 
 async fn rename_collection(
+    State(state): State<Arc<AppState>>,
     Path(collection_id): Path<i64>,
     Json(req): Json<CollectionRenameRequest>,
 ) -> Response {
-    let base = albert_base(&req.endpoint);
+    let creds = state.credentials.read().await.clone();
+    let base = albert_base(&creds.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(config::timeout_image_proxy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -989,7 +1060,7 @@ async fn rename_collection(
 
     match client
         .patch(format!("{}/collections/{}", base, collection_id))
-        .bearer_auth(&req.bearer)
+        .bearer_auth(&creds.bearer)
         .json(&json!({"name": req.name}))
         .send()
         .await
@@ -1008,12 +1079,14 @@ async fn rename_collection(
 }
 
 async fn delete_collection_handler(
+    State(state): State<Arc<AppState>>,
     Path(collection_id): Path<i64>,
-    Query(params): Query<EndpointBearerParams>,
+    Query(params): Query<EndpointParams>,
 ) -> Response {
+    let creds = state.credentials.read().await.clone();
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(config::timeout_image_proxy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -1021,7 +1094,7 @@ async fn delete_collection_handler(
 
     match client
         .delete(format!("{}/collections/{}", base, collection_id))
-        .bearer_auth(&params.bearer)
+        .bearer_auth(&creds.bearer)
         .send()
         .await
     {
@@ -1039,12 +1112,14 @@ async fn delete_collection_handler(
 }
 
 async fn list_documents(
+    State(state): State<Arc<AppState>>,
     Path(collection_id): Path<i64>,
-    Query(params): Query<EndpointBearerParams>,
+    Query(params): Query<EndpointParams>,
 ) -> Response {
+    let creds = state.credentials.read().await.clone();
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(config::timeout_image_proxy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -1056,7 +1131,7 @@ async fn list_documents(
             ("collection_id", collection_id.to_string()),
             ("limit", "100".to_string()),
         ])
-        .bearer_auth(&params.bearer)
+        .bearer_auth(&creds.bearer)
         .send()
         .await
     {
@@ -1071,12 +1146,14 @@ async fn list_documents(
 }
 
 async fn delete_document(
+    State(state): State<Arc<AppState>>,
     Path(document_id): Path<i64>,
-    Query(params): Query<EndpointBearerParams>,
+    Query(params): Query<EndpointParams>,
 ) -> Response {
+    let creds = state.credentials.read().await.clone();
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
+        .timeout(config::timeout_image_proxy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -1084,7 +1161,7 @@ async fn delete_document(
 
     match client
         .delete(format!("{}/documents/{}", base, document_id))
-        .bearer_auth(&params.bearer)
+        .bearer_auth(&creds.bearer)
         .send()
         .await
     {
@@ -1101,14 +1178,17 @@ async fn delete_document(
     }
 }
 
-async fn upload_document(mut multipart: Multipart) -> Response {
+async fn upload_document(
+    State(state): State<Arc<AppState>>,
+    mut multipart: Multipart,
+) -> Response {
+    let creds = state.credentials.read().await.clone();
+
     // Extract fields from multipart
     let mut file_name = String::new();
     let mut file_bytes: Option<Bytes> = None;
     let mut file_content_type = String::from("application/octet-stream");
     let mut collection_id: Option<i64> = None;
-    let mut endpoint = String::new();
-    let mut bearer = String::new();
     let mut chunk_size = 1024i64;
     let mut chunk_overlap = 100i64;
 
@@ -1127,8 +1207,6 @@ async fn upload_document(mut multipart: Multipart) -> Response {
                     collection_id = text.parse().ok();
                 }
             }
-            "endpoint" => endpoint = field.text().await.unwrap_or_default(),
-            "bearer" => bearer = field.text().await.unwrap_or_default(),
             "chunk_size" => {
                 if let Ok(text) = field.text().await {
                     chunk_size = text.parse().unwrap_or(1024);
@@ -1152,9 +1230,9 @@ async fn upload_document(mut multipart: Multipart) -> Response {
         None => return err(StatusCode::BAD_REQUEST, "Fichier manquant"),
     };
 
-    let base = albert_base(&endpoint);
+    let base = albert_base(&creds.endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
+        .timeout(config::timeout_llm_stream())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -1174,7 +1252,7 @@ async fn upload_document(mut multipart: Multipart) -> Response {
 
     match client
         .post(format!("{}/documents", base))
-        .bearer_auth(&bearer)
+        .bearer_auth(&creds.bearer)
         .multipart(form)
         .send()
         .await

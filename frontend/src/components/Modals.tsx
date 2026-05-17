@@ -1,5 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import { API_BASE } from '../constants';
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -32,8 +46,24 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps) {
-  const [form, setForm]     = useState<Settings>({ ...settings, mcp_servers: settings.mcp_servers || [] });
-  const [newMcp, setNewMcp] = useState('');
+  const [form, setForm]         = useState<Settings>({ ...settings, mcp_servers: settings.mcp_servers || [] });
+  const [newMcp, setNewMcp]     = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetDone, setResetDone] = useState(false);
+
+  const handleResetPrompts = async () => {
+    if (!window.confirm('Réinitialiser tous les espaces et prompts à leurs valeurs par défaut ? Cette action est irréversible.')) return;
+    setResetting(true);
+    try {
+      await fetch(`${API_BASE}/api/spaces/reset`, { method: 'POST' });
+      setResetDone(true);
+      setTimeout(() => setResetDone(false), 3000);
+    } catch (e) {
+      console.error('Reset failed:', e);
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const update = (k: keyof Settings) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
@@ -87,6 +117,16 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
             <button className="btn-ghost" onClick={addMcp} style={{ flexShrink: 0 }}>Ajouter</button>
           </div>
           <div className="field-hint" style={{ marginTop: 12 }}><span className="hint-icon">💡</span><span>Ces paramètres sont sauvegardés localement et ne sont jamais transmis à un tiers.</span></div>
+
+          <div className="settings-section-title" style={{ marginTop: 18 }}>Espaces & prompts</div>
+          <div className="field-hint" style={{ marginBottom: 10 }}><span className="hint-icon">⚠️</span><span>Réinitialise les espaces et prompts aux valeurs d'usine embarquées dans le binaire.</span></div>
+          <button
+            className={`btn-danger${resetDone ? ' btn-danger--done' : ''}`}
+            onClick={handleResetPrompts}
+            disabled={resetting || resetDone}
+          >
+            {resetDone ? "✓ Réinitialisé — rechargez l'application" : resetting ? "Réinitialisation…" : "↺ Réinitialiser les prompts par défaut"}
+          </button>
         </div>
         <div className="modal-footer">
           <button className="btn-ghost" onClick={onClose}>Fermer</button>

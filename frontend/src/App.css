@@ -509,15 +509,23 @@
 }
 
 .welcome-logo {
-  width: 60px;
-  height: 60px;
+  width: 100px;
+  height: 100px;
   border-radius: 50%;
-  background: var(--green-light);
+  background: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
   margin: 0 auto 20px;
   box-shadow: 0 0 0 6px var(--green-glow);
+  overflow: hidden;
+}
+
+.welcome-logo-img {
+  width: 90%;
+  height: 90%;
+  object-fit: contain;
+  border-radius: 0;
 }
 
 .welcome-leaf { font-size: 26px; }
@@ -618,9 +626,16 @@
   justify-content: center;
   font-size: 16px;
   margin-top: 2px;
-  background: var(--green-light);
-  color: var(--green-dark);
+  background: #ffffff;
   box-shadow: 0 0 0 2px var(--green-glow);
+  overflow: hidden;
+}
+
+.assistant-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .bubble-assistant {
@@ -1423,6 +1438,26 @@
   box-shadow: var(--shadow-sm);
 }
 .btn-primary:disabled { background: var(--text-tertiary); cursor: not-allowed; }
+
+.btn-danger {
+  padding: 7px 18px;
+  border-radius: var(--radius-md);
+  border: 1px solid #f87171;
+  background: transparent;
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  color: #ef4444;
+  transition: background 0.13s, color 0.13s;
+  width: 100%;
+}
+.btn-danger:hover:not(:disabled) { background: #fef2f2; }
+.btn-danger:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger--done {
+  border-color: var(--green-mid);
+  color: var(--green-dark);
+}
 
 /* ════════════════════════════════════════
    RESPONSIVE

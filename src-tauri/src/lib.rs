@@ -1,9 +1,24 @@
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
 use std::net::SocketAddr;
 use tauri::Manager;
 use tauri::menu::{Menu, Submenu, MenuItem, PredefinedMenuItem};
 use tracing::info;
 
 mod api;
+mod config;
 mod db;
 mod mcp;
 mod models;
@@ -13,12 +28,37 @@ mod web_search;
 mod extract;
 
 pub use db::Database;
+pub use api::{AppState, Credentials};
 
-/// Port on which the embedded Axum server listens.
-const API_PORT: u16 = 45678;
+// ── Commande Tauri : initialise les credentials dans AppState ─────────────────
+// Appelée depuis le frontend via invoke() — IPC synchrone, pas HTTP.
+// Garantit que AppState est peuplé avant toute requête HTTP au serveur Axum.
+
+#[derive(serde::Deserialize)]
+struct CredentialsPayload {
+    endpoint:   String,
+    bearer:     String,
+    #[serde(default)]
+    tavily_key: String,
+}
+
+#[tauri::command]
+async fn init_credentials(
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+    payload: CredentialsPayload,
+) -> Result<(), String> {
+    let mut creds = state.credentials.write().await;
+    creds.endpoint   = payload.endpoint;
+    creds.bearer     = payload.bearer;
+    creds.tavily_key = payload.tavily_key;
+    Ok(())
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Charge le fichier .env s'il existe (silencieux si absent)
+    let _ = dotenvy::dotenv();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             std::env::var("RUST_LOG")
@@ -111,14 +151,19 @@ pub fn run() {
             let db_path_clone = db_path.clone();
             let prompts_path_clone = prompts_path.clone();
 
-            tauri::async_runtime::spawn(async move {
-                let db = Database::new(&db_path_clone)
+            let db = tauri::async_runtime::block_on(async {
+                Database::new(&db_path_clone)
                     .await
-                    .expect("Failed to open database");
+                    .expect("Failed to open database")
+            });
 
-                let router = api::build_router(db, prompts_path_clone);
+            let (router, app_state) = api::build_router(db, prompts_path_clone);
 
-                let addr = SocketAddr::from(([127, 0, 0, 1], API_PORT));
+            // Partager AppState avec les commandes Tauri
+            handle.manage(app_state);
+
+            tauri::async_runtime::spawn(async move {
+                let addr = SocketAddr::from(([127, 0, 0, 1], config::api_port()));
                 info!("API server listening on http://{}", addr);
 
                 let listener = tokio::net::TcpListener::bind(addr)
@@ -132,6 +177,7 @@ pub fn run() {
 
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![init_credentials])
         .run(tauri::generate_context!())
         .expect("error while running Demeter");
 }

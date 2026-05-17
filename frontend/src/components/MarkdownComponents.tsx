@@ -1,4 +1,18 @@
-import React, { useState, useEffect, useRef } from 'react';
+// ============================================================================
+// Demeter — Assistant IA desktop
+// ============================================================================
+// Auteur  : Pierre COUGET
+// Licence : GNU Affero General Public License v3.0 (AGPL-3.0)
+//           https://www.gnu.org/licenses/agpl-3.0.html
+// Année   : 2026
+// ----------------------------------------------------------------------------
+// Ce fichier fait partie du projet Demeter.
+// Vous pouvez le redistribuer et/ou le modifier selon les termes de la
+// licence AGPL-3.0 publiée par la Free Software Foundation.
+// ============================================================================
+
+
+import React, { useState, useEffect, useRef, memo } from 'react';
 import type { Components } from 'react-markdown';
 import type { Element } from 'hast';
 import { API_BASE } from '../constants';
@@ -44,7 +58,7 @@ function getMermaidSandbox(): HTMLElement {
   return el;
 }
 
-// ── Image proxy & resolution ──────────────────────────────────────────────────
+// ── Image proxy wikimedia ──────────────────────────────────────────────────
 async function resolveImageUrl(rawSrc: string): Promise<string | null> {
   if (!rawSrc) return null;
   const wikiFileMatch = rawSrc.match(/commons\.wikimedia\.org\/wiki\/File:(.+)/i);
@@ -100,7 +114,7 @@ export function MdImage({ src: rawSrc, alt }: MdImageProps) {
 }
 
 
-// ── EChartsBlock ─────────────────────────────────────────────────────────────
+// ── ECharts ─────────────────────────────────────────────────────────────
 interface EChartsBlockProps {
   code: string;
   streaming?: boolean;
@@ -108,7 +122,7 @@ interface EChartsBlockProps {
   getImageRef?: React.MutableRefObject<(() => string) | null>;
 }
 
-export function EChartsBlock({ code, streaming, compact, getImageRef }: EChartsBlockProps) {
+export const EChartsBlock = memo(function EChartsBlock({ code, streaming, compact, getImageRef }: EChartsBlockProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef     = useRef<echarts.ECharts | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -146,12 +160,12 @@ export function EChartsBlock({ code, streaming, compact, getImageRef }: EChartsB
   );
   if (error) return <div className="echarts-error"><span>⚠ Erreur ECharts</span><pre>{error}</pre></div>;
   return <div className="echarts-wrapper" style={compact ? { height: 320 } : {}}><div ref={containerRef} className="echarts-canvas" /></div>;
-}
+});
 
-// ── MermaidBlock ─────────────────────────────────────────────────────────────
+// ── Mermaid  ─────────────────────────────────────────────────────────────
 interface MermaidBlockProps { code: string; streaming?: boolean; }
 
-export function MermaidBlock({ code, streaming }: MermaidBlockProps) {
+export const MermaidBlock = memo(function MermaidBlock({ code, streaming }: MermaidBlockProps) {
   const [svg, setSvg]         = useState<string | null>(null);
   const [error, setError]     = useState<boolean>(false);
   const [rawCode, setRawCode] = useState<string | null>(null);
@@ -202,7 +216,7 @@ export function MermaidBlock({ code, streaming }: MermaidBlockProps) {
   );
   if (!svg) return <div className="echarts-wrapper echarts-loading"><span className="echarts-spinner" /></div>;
   return <div className="mermaid-wrapper" dangerouslySetInnerHTML={{ __html: svg }} />;
-}
+});
 
 // ── WordChatCard — placeholder inline dans le chat ────────────────────────────
 interface WordChatCardProps { raw: string; }
@@ -222,7 +236,7 @@ export function WordChatCard({ raw }: WordChatCardProps) {
   );
 }
 
-// ── CodeBlock dispatcher ──────────────────────────────────────────────────────
+// ── CodeBlock ──────────────────────────────────────────────────────
 interface CodeBlockProps {
   className?: string;
   children?: React.ReactNode;
@@ -244,7 +258,7 @@ export function CodeBlock({ className, children, node, streaming }: CodeBlockPro
   return <pre className="code-block"><code className={className}>{children}</code></pre>;
 }
 
-// ── Markdown component map factory ───────────────────────────────────────────
+// ── Markdown ───────────────────────────────────────────
 export function makeMdComponents(streaming: boolean): Components {
   const CodeBlockWrapper = (props: Omit<CodeBlockProps, 'streaming'>) =>
     <CodeBlock {...props} streaming={streaming} />;

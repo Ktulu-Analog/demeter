@@ -3,31 +3,8 @@ use serde_json::Value;
 use std::collections::HashMap;
 use tracing::{info, warn};
 
+use crate::config;
 use crate::models::Chunk;
-
-// ── Config from env (with defaults) ──────────────────────────────────────────
-
-fn rerank_model() -> String {
-    std::env::var("RERANK_MODEL").unwrap_or_else(|_| "bge-reranker-v2-m3".to_string())
-}
-fn rag_top_k() -> usize {
-    std::env::var("RAG_TOP_K")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(20)
-}
-fn rag_top_rerank() -> usize {
-    std::env::var("RAG_TOP_RERANK")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(5)
-}
-fn rag_min_score() -> f64 {
-    std::env::var("RAG_MIN_SCORE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.15)
-}
 
 // ── URL helper ────────────────────────────────────────────────────────────────
 
@@ -55,7 +32,7 @@ pub async fn get_collection_id(
 ) -> Option<i64> {
     let base = albert_base(endpoint);
     let client = Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(config::timeout_doc_resolve())
         .build()
         .ok()?;
 
@@ -145,7 +122,7 @@ pub async fn search_chunks(
 ) -> Vec<Chunk> {
     let base = albert_base(endpoint);
     let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(config::timeout_rag())
         .build()
     {
         Ok(c) => c,
@@ -159,7 +136,7 @@ pub async fn search_chunks(
         "collection_ids": [collection_id],
         "query":          query,
         "method":         "hybrid",
-        "limit":          rag_top_k(),
+        "limit":          config::rag_top_k(),
         "rff_k":          60,
     });
 
@@ -284,19 +261,19 @@ pub async fn rerank_chunks(
 
     let base = albert_base(endpoint);
     let client = match Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(config::timeout_rerank())
         .build()
     {
         Ok(c) => c,
-        Err(_) => return chunks[..rag_top_rerank().min(chunks.len())].to_vec(),
+        Err(_) => return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec(),
     };
 
     let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
     let body = serde_json::json!({
-        "model":     rerank_model(),
+        "model":     config::rerank_model(),
         "query":     query,
         "documents": texts,
-        "top_n":     rag_top_rerank(),
+        "top_n":     config::rag_top_rerank(),
     });
 
     let resp = match client
@@ -309,21 +286,21 @@ pub async fn rerank_chunks(
         Ok(r) => r,
         Err(e) => {
             warn!("Reranking failed ({}), fallback", e);
-            return chunks[..rag_top_rerank().min(chunks.len())].to_vec();
+            return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec();
         }
     };
 
     if !resp.status().is_success() {
         warn!("Rerank HTTP {}", resp.status());
-        return chunks[..rag_top_rerank().min(chunks.len())].to_vec();
+        return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec();
     }
 
     let data: Value = match resp.json().await {
         Ok(v) => v,
-        Err(_) => return chunks[..rag_top_rerank().min(chunks.len())].to_vec(),
+        Err(_) => return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec(),
     };
 
-    let min_score = rag_min_score();
+    let min_score = config::rag_min_score();
     let mut reranked: Vec<Chunk> = Vec::new();
 
     if let Some(results) = data["results"].as_array() {
