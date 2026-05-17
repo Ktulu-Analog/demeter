@@ -33,6 +33,35 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "publisher": "Pierre Couget",
+    "copyright": "© 2026 Pierre Couget",
+    "category": "Productivity",
+    "shortDescription": "Assistant IA orienté RH",
+    "longDescription": "Demeter est un assistant IA desktop utilisant les API Albert et Anthropic, conçu pour les professionnels RH.",
+    "windows": {
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "",
+      "wix": {
+        "language": "fr-FR",
+        "bannerPath": "installer/banner.bmp",
+        "dialogImagePath": "installer/dialog.bmp"
+      },
+      "nsis": {
+        "language": "French",
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/header.bmp",
+        "sidebarImage": "installer/sidebar.bmp",
+        "license": "installer/license.html",
+        "customNsisScript": "installer/nsis-custom.nsh"
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "utils"
+      },
+      "category": "Utility"
+    }
   }
 }
