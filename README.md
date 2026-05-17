@@ -7,10 +7,11 @@
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-1.77+-orange?logo=rust)](https://rustup.rs)
 
-Demeter est un assistant IA spécialisé en ressources humaines (fonction publique d'État),
+Demeter est un assistant IA spécialisé en ressources humaines (fonction publique d'État dans
+sa configuration actuelle, mais vous pouvez modifier les prompts pour l'adapter à vos besoins),
 fonctionnant entièrement en local sans service externe — aucun Docker, aucun cloud requis.
 Le backend **Rust/Axum** est embarqué dans l'application **Tauri v2** et pilote un LLM
-via n'importe quelle API compatible OpenAI (Albert, OpenAI, Mistral, Ollama…).
+via n'importe quelle API compatible OpenAI (Albert API, OpenAI, Mistral, Ollama…).
 
 ---
 
@@ -142,11 +143,11 @@ Les installateurs sont générés dans `src-tauri/target/release/bundle/` :
 
 ### Connexion au LLM
 
-Au premier lancement, ouvre **Paramètres** (⌘, / Ctrl+,) et renseigne :
+Au premier lancement, ouvrez **Paramètres** (⌘, / Ctrl+,) et renseignez :
 
 - **Endpoint** — URL de l'API compatible OpenAI  
   ex. `https://albert.api.etalab.gouv.fr/v1`
-- **Clé API** — ton token Bearer
+- **Clé API** — votre token Bearer
 - **Modèle** — identifiant du modèle  
   ex. `meta-llama/Llama-3.1-8B-Instruct`
 
@@ -181,10 +182,10 @@ Les espaces sont configurés dans `src-tauri/prompts.yml` (embarqué dans le bin
 
 ## RAG — Ingestion de documents
 
-1. Ouvre **Ingestion RAG** (⌘R / Ctrl+R)
-2. Crée ou sélectionne une collection
-3. Dépose tes fichiers PDF ou DOCX
-4. Active le RAG dans une conversation via le bouton 📚
+1. Ouvrez **Ingestion RAG** (⌘R / Ctrl+R)
+2. Créez ou sélectionnez une collection
+3. Déposez vos fichiers PDF ou DOCX
+4. Activez le RAG dans une conversation via le bouton 📚
 
 Pipeline : extraction texte → chunking → embeddings (Albert) → reranking (BGE) → injection contexte.
 
@@ -194,13 +195,13 @@ Pipeline : extraction texte → chunking → embeddings (Albert) → reranking (
 
 Demeter supporte le [Model Context Protocol](https://modelcontextprotocol.io) en transport **HTTP Streamable** (spec 2025-03-26), compatible avec `mcp.data.gouv.fr` et tout serveur FastMCP stateless.
 
-Ajoute des serveurs MCP dans les paramètres. Les outils disponibles sont découverts automatiquement.
+Ajoutez des serveurs MCP dans les paramètres. Les outils disponibles sont découverts automatiquement.
 
 ---
 
 ## Contribution
 
-Les contributions sont les bienvenues ! Consulte [CONTRIBUTING.md](CONTRIBUTING.md) pour les détails.
+Les contributions sont les bienvenues ! Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour les détails.
 
 ```bash
 # Fork → branche
