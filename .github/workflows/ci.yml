@@ -40,8 +40,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # tauri::generate_context!() résout frontendDist relativement à tauri.conf.json
+      # et vérifie l'existence du dossier au moment de la compilation.
+      # On crée un stub avec un chemin absolu pour éviter toute ambiguïté
+      # liée au working-directory des étapes Cargo.
       - name: Create frontend/build stub
-        run: mkdir -p frontend/build && echo '<html></html>' > frontend/build/index.html
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/frontend/build"
+          echo '<html><body></body></html>' > "$GITHUB_WORKSPACE/frontend/build/index.html"
 
       - name: Install system dependencies (Linux)
         run: |
@@ -72,14 +78,18 @@ jobs:
         working-directory: src-tauri
         run: cargo fmt --check
 
+      # --no-default-features désactive `custom-protocol` qui force Tauri à embarquer
+      # le dossier frontendDist dans le binaire — inutile pour du lint/check en CI.
+      # Le stub suffit à satisfaire generate_context!(), mais on évite ainsi
+      # toute vérification d'intégrité supplémentaire liée au feature.
       - name: Clippy
         working-directory: src-tauri
-        run: cargo clippy -- -D warnings
+        run: cargo clippy --no-default-features -- -D warnings
 
       - name: Build (check)
         working-directory: src-tauri
-        run: cargo check
+        run: cargo check --no-default-features
 
       - name: Tests
         working-directory: src-tauri
-        run: cargo test
+        run: cargo test --no-default-features
