@@ -49,8 +49,7 @@
         "installMode": "currentUser",
         "installerIcon": "icons/icon.ico",
         "headerImage": "installer/header.bmp",
-        "sidebarImage": "installer/sidebar.bmp",
-        "license": "installer/license.html"
+        "sidebarImage": "installer/sidebar.bmp"
       }
     },
     "linux": {
