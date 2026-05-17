@@ -2,7 +2,7 @@
 
 > Assistant RH intelligent — application desktop cross-platform (Tauri v2 · Rust · React)
 
-[![CI](https://github.com/Ktulu-Analog/demeter/actions/workflows/ci.yml/badge.svg)](https://github.com/<votre-org>/demeter/actions/workflows/ci.yml)
+[![CI](https://github.com/Ktulu-Analog/demeter/actions/workflows/ci.yml/badge.svg)](https://github.com/Ktulu-Analog/demeter/actions/workflows/ci.yml)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-v2-24C8D8?logo=tauri)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-1.77+-orange?logo=rust)](https://rustup.rs)
