@@ -21,8 +21,12 @@ import { useDialog } from '../DialogContext';
 interface Collection {
   id: number;
   name: string;
+  owner: string;
   description?: string;
   visibility: 'private' | 'public';
+  created: number;
+  updated: number;
+  documents?: number;
 }
 
 interface Document {
@@ -41,6 +45,51 @@ interface Space {
   id: string;
   label?: string;
   icon?: string;
+}
+
+// ── CollectionTooltip ─────────────────────────────────────────────────────────
+
+function CollectionTooltip({ collection, children }: { collection: Collection; children: React.ReactNode }) {
+  const [pos, setPos] = React.useState<{ x: number; y: number } | null>(null);
+
+  const fmt = (ts: number) => ts
+    ? new Date(ts * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })
+    : '—';
+
+  const handleMouseEnter = (e: React.MouseEvent) => {
+    setPos({ x: e.clientX + 14, y: e.clientY + 14 });
+  };
+  const handleMouseMove = (e: React.MouseEvent) => {
+    setPos({ x: e.clientX + 14, y: e.clientY + 14 });
+  };
+  const handleMouseLeave = () => setPos(null);
+
+  return (
+    <span
+      style={{ display: 'contents' }}
+      onMouseEnter={handleMouseEnter}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+    >
+      {children}
+      {pos && (
+        <div
+          className="col-tooltip"
+          style={{ position: 'fixed', left: pos.x, top: pos.y, zIndex: 9999, pointerEvents: 'none' }}
+        >
+          {collection.description && (
+            <div className="col-tooltip-desc">{collection.description}</div>
+          )}
+          <div className="col-tooltip-row"><span className="col-tooltip-icon">👤</span><span>{collection.owner || '—'}</span></div>
+          {collection.documents != null && (
+            <div className="col-tooltip-row"><span className="col-tooltip-icon">📄</span><span>{collection.documents} document{collection.documents !== 1 ? 's' : ''}</span></div>
+          )}
+          <div className="col-tooltip-row"><span className="col-tooltip-icon">🗓</span><span>Créée le {fmt(collection.created)}</span></div>
+          <div className="col-tooltip-row"><span className="col-tooltip-icon">🔄</span><span>Mise à jour le {fmt(collection.updated)}</span></div>
+        </div>
+      )}
+    </span>
+  );
 }
 
 // ── CopyButton & CodeSnippet ──────────────────────────────────────────────────
@@ -208,7 +257,9 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
   const folderInputRef = useRef<HTMLInputElement>(null);
   const dropRef        = useRef<HTMLDivElement>(null);
 
-  const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => toastFn(msg, type), [toastFn]);
+  const showToastRef = useRef(toastFn);
+  useEffect(() => { showToastRef.current = toastFn; }, [toastFn]);
+  const showToast = useCallback((msg: string, type: 'success' | 'error' = 'success') => showToastRef.current(msg, type), []);
 
   const [spaceAssignments, setSpaceAssignments] = useState<Record<string, number | null>>(() => {
     try { return JSON.parse(localStorage.getItem('demeter_space_assignments') || '{}'); } catch { return {}; }
@@ -219,24 +270,66 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
     localStorage.setItem('demeter_space_assignments', JSON.stringify(next));
   };
 
-  const loadCollections = useCallback(async () => {
+  const CACHE_TTL_MS = 180 * 60 * 1000; // 3 heures
+  const cacheKey = `demeter_collections_cache_${btoa(settings.endpoint).slice(0, 16)}`;
+
+  const [cacheAge, setCacheAge] = useState<number | null>(null); // secondes
+
+  // Met à jour l'affichage de l'âge toutes les 15s
+  useEffect(() => {
+    const tick = () => {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (!raw) { setCacheAge(null); return; }
+        const { ts } = JSON.parse(raw);
+        setCacheAge(Math.floor((Date.now() - ts) / 1000));
+      } catch { setCacheAge(null); }
+    };
+    tick();
+    const id = setInterval(tick, 15_000);
+    return () => clearInterval(id);
+  }, [cacheKey]);
+
+  const applyCollections = useCallback((sorted: Collection[]) => {
+    setCollections(sorted);
+    const nameCache: Record<number, string> = {};
+    sorted.forEach(c => { nameCache[c.id] = c.name; });
+    localStorage.setItem('demeter_collection_names', JSON.stringify(nameCache));
+  }, []);
+
+  const loadCollections = useCallback(async (force = false) => {
     if (!settings.endpoint || !settings.bearer) return;
+
+    // Lecture du cache si non forcé
+    if (!force) {
+      try {
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const { ts, data } = JSON.parse(raw);
+          if (Date.now() - ts < CACHE_TTL_MS) {
+            applyCollections(data);
+            setCacheAge(Math.floor((Date.now() - ts) / 1000));
+            return;
+          }
+        }
+      } catch { /* cache corrompu, on recharge */ }
+    }
+
     setLoadingCollections(true);
     try {
       const res = await fetch(`${API_BASE}/api-proxy/api/ingestion/collections?endpoint=${encodeURIComponent(settings.endpoint)}`);
       if (!res.ok) throw new Error(await res.text());
-      const data: { data?: Collection[] } = await res.json();
-      const sorted = (data.data || []).sort((a, b) => (a.visibility === 'private' ? 0 : 1) - (b.visibility === 'private' ? 0 : 1));
-      setCollections(sorted);
-      const nameCache: Record<number, string> = {};
-      sorted.forEach(c => { nameCache[c.id] = c.name; });
-      localStorage.setItem('demeter_collection_names', JSON.stringify(nameCache));
+      const resp: { data?: Collection[] } = await res.json();
+      const sorted = (resp.data || []).sort((a, b) => (a.visibility === 'private' ? 0 : 1) - (b.visibility === 'private' ? 0 : 1));
+      applyCollections(sorted);
+      localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), data: sorted }));
+      setCacheAge(0);
     } catch (e) {
       showToast(`Erreur chargement collections : ${(e as Error).message}`, 'error');
     } finally {
       setLoadingCollections(false);
     }
-  }, [settings, showToast]);
+  }, [settings, showToast, cacheKey, applyCollections]);
 
   useEffect(() => { loadCollections(); }, [loadCollections]);
 
@@ -258,7 +351,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
       });
       if (!res.ok) { const e = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(e.detail || res.statusText); }
       showToast(`Collection "${selectedSpaceId}" créée avec succès !`);
-      await loadCollections();
+      await loadCollections(true);
     } catch (e) {
       showToast(`Erreur : ${(e as Error).message}`, 'error');
     } finally {
@@ -276,7 +369,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
       showToast(`Collection "${colName}" supprimée.`);
       setDocuments(d => { const nd = { ...d }; delete nd[colId]; return nd; });
       setExpandedCollection(p => p === colId ? null : p);
-      await loadCollections();
+      await loadCollections(true);
     } catch (e) {
       showToast(`Erreur : ${(e as Error).message}`, 'error');
     } finally {
@@ -294,7 +387,7 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
       });
       if (!res.ok) { const err = await res.json().catch(() => ({ detail: res.statusText })); throw new Error(err.detail || res.statusText); }
       showToast(`Collection renommée en "${newName.trim()}".`);
-      await loadCollections();
+      await loadCollections(true);
     } catch (e) {
       showToast(`Erreur : ${(e as Error).message}`, 'error');
     }
@@ -375,6 +468,9 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
         </div>
 
         <div className="modal-body ingestion-body">
+          {/* ── Colonne gauche ── */}
+          <div className="ingestion-col-left">
+
           {/* Sélecteur d'espace */}
           <div className="ingestion-section">
             <label className="field-label">Espace cible</label>
@@ -503,15 +599,32 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
             <IngestionGuide collection={matchingCollection} endpoint={settings.endpoint} bearer={settings.bearer} chunkSize={chunkSize} chunkOverlap={chunkOverlap} />
           )}
 
+          </div>{/* fin ingestion-col-left */}
+
+          {/* ── Colonne droite ── */}
+          <div className="ingestion-col-right">
+
           {/* Liste des collections */}
           <div className="ingestion-section">
             <div className="ingestion-collections-header">
               <label className="field-label" style={{ margin: 0 }}>Collections Albert</label>
-              <button className="ingestion-refresh-btn" onClick={loadCollections} disabled={loadingCollections} title="Rafraîchir">
-                <svg viewBox="0 0 16 16" fill="currentColor" width="13" height="13" style={{ animation: loadingCollections ? 'spin 1s linear infinite' : 'none' }}>
-                  <path d="M13.65 2.35A8 8 0 1014 8h-2a6 6 0 10-.54 2.36l1.45 1.45A8 8 0 0113.65 2.35z"/>
-                </svg>
-              </button>
+              <div className="ingestion-cache-info">
+                {cacheAge !== null && !loadingCollections && (
+                  <span className="ingestion-cache-age" title="Données issues du cache local">
+                    {cacheAge < 60
+                      ? `il y a ${cacheAge}s`
+                      : `il y a ${Math.floor(cacheAge / 60)}min`}
+                  </span>
+                )}
+                <button className="ingestion-refresh-btn" onClick={() => loadCollections(true)} disabled={loadingCollections} title="Forcer le rechargement">
+                  <svg viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" width="14" height="14" style={{ animation: loadingCollections ? 'spin 1s linear infinite' : 'none' }}>
+                    <path d="M16 3v4.5h-4.5"/>
+                    <path d="M2 9a7 7 0 0 1 11.95-4.95L16 7.5"/>
+                    <path d="M2 15v-4.5h4.5"/>
+                    <path d="M16 9a7 7 0 0 1-11.95 4.95L2 10.5"/>
+                  </svg>
+                </button>
+              </div>
             </div>
 
             {loadingCollections ? (
@@ -530,7 +643,9 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
                       <div className="ingestion-col-header">
                         <div className="ingestion-col-info" onClick={() => loadDocuments(col.id)}>
                           <span className="ingestion-col-chevron">{isExpanded ? '▾' : '▸'}</span>
-                          <span className="ingestion-col-name">{col.name}</span>
+                          <CollectionTooltip collection={col}>
+                            <span className="ingestion-col-name">{col.name}</span>
+                          </CollectionTooltip>
                           {isMatching && <span className="ingestion-col-badge">espace actif</span>}
                         </div>
                         <div className="ingestion-col-actions">
@@ -581,6 +696,8 @@ export function IngestionModal({ settings, spaces, onClose }: IngestionModalProp
             <span className="hint-icon">💡</span>
             <span>Les collections sont liées à un espace par leur nom. Le RAG se déclenche automatiquement à chaque question dans l'espace correspondant.</span>
           </div>
+
+          </div>{/* fin ingestion-col-right */}
         </div>
       </div>
     </div>

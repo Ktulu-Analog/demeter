@@ -84,49 +84,83 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
 
   return (
     <div className="modal-overlay">
-      <div className="modal">
+      <div className="modal settings-modal">
         <div className="modal-header">
           <div className="modal-header-left"><span className="modal-icon">⚙️</span><span className="modal-title">Configuration</span></div>
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
-        <div className="modal-body">
-          <div className="settings-section-title">LLM</div>
-          <div className="field-group"><label className="field-label">Endpoint LLM</label><input className="field-input" value={form.endpoint} onChange={update('endpoint')} placeholder="https://albert.api.etalab.gouv.fr/v1" /></div>
-          <div className="field-group"><label className="field-label">Bearer Token</label><input className="field-input" type="password" value={form.bearer} onChange={update('bearer')} placeholder="sk-…" /></div>
-          <div className="field-group"><label className="field-label">Modèle</label><input className="field-input" value={form.model} onChange={update('model')} placeholder="openai/gpt-oss-120b" /></div>
-          <div className="field-group">
-            <label className="field-label">Clé Tavily <span style={{ fontWeight: 'normal', opacity: .6 }}>(recherche web)</span></label>
-            <input className="field-input" type="password" value={form.tavily_key || ''} onChange={update('tavily_key')} placeholder="tvly-…" />
-          </div>
+        <div className="modal-body settings-body">
 
-          <div className="settings-section-title" style={{ marginTop: 18 }}>Serveurs MCP</div>
-          <div className="field-hint" style={{ marginBottom: 8 }}><span className="hint-icon">🔌</span><span>Connecteurs MCP qui étendent les capacités du LLM (filesystem, calendrier, SIRH…)</span></div>
-          {(form.mcp_servers || []).map((url, i) => (
-            <div key={i} className="mcp-server-row">
-              <span className="mcp-server-url">{url}</span>
-              <button className="mcp-remove-btn" onClick={() => removeMcp(i)} title="Supprimer">✕</button>
+          {/* Colonne gauche — LLM */}
+          <div className="settings-col">
+            <div className="settings-section-title">LLM</div>
+            <div className="field-group">
+              <label className="field-label">Endpoint LLM</label>
+              <input className="field-input" value={form.endpoint} onChange={update('endpoint')} placeholder="https://albert.api.etalab.gouv.fr/v1" />
             </div>
-          ))}
-          <div className="mcp-add-row">
-            <input
-              className="field-input" value={newMcp}
-              onChange={e => setNewMcp(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && addMcp()}
-              placeholder="https://mon-serveur-mcp.example.com"
-            />
-            <button className="btn-ghost" onClick={addMcp} style={{ flexShrink: 0 }}>Ajouter</button>
-          </div>
-          <div className="field-hint" style={{ marginTop: 12 }}><span className="hint-icon">💡</span><span>Ces paramètres sont sauvegardés localement et ne sont jamais transmis à un tiers.</span></div>
+            <div className="field-group">
+              <label className="field-label">Bearer Token</label>
+              <input className="field-input" type="password" value={form.bearer} onChange={update('bearer')} placeholder="sk-…" />
+            </div>
+            <div className="field-group">
+              <label className="field-label">Modèle</label>
+              <input className="field-input" value={form.model} onChange={update('model')} placeholder="openai/gpt-oss-120b" />
+            </div>
+            <div className="field-group">
+              <label className="field-label">Clé Tavily <span style={{ fontWeight: 'normal', opacity: .6 }}>(recherche web)</span></label>
+              <input className="field-input" type="password" value={form.tavily_key || ''} onChange={update('tavily_key')} placeholder="tvly-…" />
+            </div>
 
-          <div className="settings-section-title" style={{ marginTop: 18 }}>Espaces & prompts</div>
-          <div className="field-hint" style={{ marginBottom: 10 }}><span className="hint-icon">⚠️</span><span>Réinitialise les espaces et prompts aux valeurs d'usine embarquées dans le binaire.</span></div>
-          <button
-            className={`btn-danger${resetDone ? ' btn-danger--done' : ''}`}
-            onClick={handleResetPrompts}
-            disabled={resetting || resetDone}
-          >
-            {resetDone ? "✓ Réinitialisé — rechargez l'application" : resetting ? "Réinitialisation…" : "↺ Réinitialiser les prompts par défaut"}
-          </button>
+            <div className="settings-section-title" style={{ marginTop: 16 }}>Espaces &amp; prompts</div>
+            <div className="field-hint" style={{ marginBottom: 10 }}>
+              <span className="hint-icon">⚠️</span>
+              <span>Réinitialise les espaces et prompts aux valeurs d'usine embarquées dans le binaire.</span>
+            </div>
+            <button
+              className={`btn-danger${resetDone ? ' btn-danger--done' : ''}`}
+              onClick={handleResetPrompts}
+              disabled={resetting || resetDone}
+            >
+              {resetDone ? "✓ Réinitialisé — rechargez l'application" : resetting ? "Réinitialisation…" : "↺ Réinitialiser les prompts par défaut"}
+            </button>
+          </div>
+
+          {/* Séparateur vertical */}
+          <div className="settings-divider" />
+
+          {/* Colonne droite — MCP */}
+          <div className="settings-col">
+            <div className="settings-section-title">Serveurs MCP</div>
+            <div className="field-hint" style={{ marginBottom: 8 }}>
+              <span className="hint-icon">🔌</span>
+              <span>Connecteurs MCP qui étendent les capacités du LLM (filesystem, calendrier, SIRH…)</span>
+            </div>
+            <div className="settings-mcp-list">
+              {(form.mcp_servers || []).map((url, i) => (
+                <div key={i} className="mcp-server-row">
+                  <span className="mcp-server-url">{url}</span>
+                  <button className="mcp-remove-btn" onClick={() => removeMcp(i)} title="Supprimer">✕</button>
+                </div>
+              ))}
+              {(form.mcp_servers || []).length === 0 && (
+                <div className="settings-mcp-empty">Aucun serveur configuré.</div>
+              )}
+            </div>
+            <div className="mcp-add-row" style={{ marginTop: 8 }}>
+              <input
+                className="field-input" value={newMcp}
+                onChange={e => setNewMcp(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addMcp()}
+                placeholder="https://mon-serveur-mcp.example.com"
+              />
+              <button className="btn-ghost" onClick={addMcp} style={{ flexShrink: 0 }}>Ajouter</button>
+            </div>
+            <div className="field-hint" style={{ marginTop: 12 }}>
+              <span className="hint-icon">💡</span>
+              <span>Ces paramètres sont sauvegardés localement et ne sont jamais transmis à un tiers.</span>
+            </div>
+          </div>
+
         </div>
         <div className="modal-footer">
           <button className="btn-ghost" onClick={onClose}>Fermer</button>
