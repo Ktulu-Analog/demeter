@@ -574,6 +574,7 @@ function AppInner() {
           attachments={attachments}
           onAttachmentsChange={setAttachments}
           onFilePickerClick={() => fileInputRef.current?.click()}
+          onMcpClick={() => setShowMcpStatus(true)}
           extracting={extracting}
           onSelectResponse={handleSelectResponse}
           onClose={() => setShowCompare(false)}
