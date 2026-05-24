@@ -25,6 +25,12 @@ et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 - **Fenêtre de contexte des modèles** — la liste des modèles récupère et expose le champ `max_context_length`, transmis au mode Comparaison
 - **Couleurs d'erreur** — les valeurs hexadécimales codées en dur (`#fef2f2`, `#fca5a5`, `#b91c1c`) sont remplacées par les variables CSS `--red-light` et `--red-dark` dans `App.css` et `MarkdownComponents.tsx`
 
+### Corrigé
+
+- **TypeScript** — prop `onMcpClick` manquante sur `<CompareModeView>` dans `App.tsx`
+- **TypeScript** — `findLast` indisponible en ES2020 : `lib` dans `tsconfig.json` passée de `ES2020` à `ES2023`
+- **Organisation** — `CompareMode.css` déplacé de `src/components/` vers `src/` pour respecter la convention du projet ; import mis à jour dans `App.tsx`
+
 ---
 
 ## [2.0.1] — 2026-05-18

@@ -338,7 +338,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
         <div className="about-info">
           <div className="about-meta">
             <div className="about-row"><span className="about-key">Auteur</span><span className="about-val">Pierre COUGET</span></div>
-            <div className="about-row"><span className="about-key">Version</span><span className="about-val">v2.1.1</span></div>
+            <div className="about-row"><span className="about-key">Version</span><span className="about-val">v2.1.0</span></div>
             <div className="about-row">
               <span className="about-key">Contact</span>
               <a className="about-val about-link" href="mailto:ktulu.analog@gmail.com">ktulu.analog@gmail.com ↗</a>
