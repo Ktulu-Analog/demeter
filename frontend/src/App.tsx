@@ -29,7 +29,7 @@ import type { Settings } from './components/Modals';
 import { PromptsEditorModal } from './components/PromptsEditorModal';
 import { IngestionModal } from './components/IngestionModal';
 import { CompareModeView } from './components/CompareMode';
-import './components/CompareMode.css';
+import './CompareMode.css';
 import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
 
 const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', tavily_key: '', mcp_servers: [] };
