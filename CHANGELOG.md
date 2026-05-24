@@ -7,6 +7,26 @@ et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 
 ---
 
+## [2.1.0] — 2026-05-24
+
+### Ajouté
+
+- **Mode Comparaison** — nouveau mode permettant de soumettre la même question à deux modèles simultanément et de comparer les réponses côte à côte ; l'utilisateur choisit la réponse préférée, qui est injectée dans le chat principal. Le bouton « Comparer » apparaît dans la barre d'outils dès que deux modèles ou plus sont disponibles
+- **Personnalisation de la police** — nouvelle section « Apparence » dans les paramètres : choix de la police (DM Sans, Inter, Système, Ubuntu) et de la taille (XS 12 px → XL 16 px) avec aperçu en temps réel ; les préférences sont appliquées immédiatement via les variables CSS `--font-body` et `--font-size-base`
+- **Bouton « Aller en bas »** — bouton flottant qui apparaît automatiquement lorsque l'historique est remonté et disparaît quand l'utilisateur se trouve en bas du chat
+- **Score vectoriel dans l'API** — le champ `score` des chunks RAG est désormais exposé dans les réponses JSON (en complément du `rerank_score` existant) et affiché en tooltip dans le badge sources RAG
+- **Contournement de bugs des modèles GPT** — lorsque l'utilisateur demande la production d'un fichier Word avec des graphiques et qu'il utilise un modèle GPT, Demeter bascule automatiquement sur un modèle Mistral le temps de la réponse.
+
+### Amélioré
+
+- **Sources RAG** — les chunks sont maintenant regroupés par fichier source dans le badge ; le compteur affiche le nombre d'extraits et le nombre de fichiers distincts ; les scores (vectoriel et rerank) sont visibles en tooltip sur chaque pastille d'index
+- **Thème Mermaid dynamique** — les diagrammes s'adaptent en temps réel au thème clair/sombre du système via `matchMedia` ; les couleurs utilisent les variables CSS de l'application
+- **Police des diagrammes** — les labels Mermaid et les diagrammes ECharts héritent désormais de `var(--font-body)` pour rester cohérents avec le reste de l'interface
+- **Fenêtre de contexte des modèles** — la liste des modèles récupère et expose le champ `max_context_length`, transmis au mode Comparaison
+- **Couleurs d'erreur** — les valeurs hexadécimales codées en dur (`#fef2f2`, `#fca5a5`, `#b91c1c`) sont remplacées par les variables CSS `--red-light` et `--red-dark` dans `App.css` et `MarkdownComponents.tsx`
+
+---
+
 ## [2.0.1] — 2026-05-18
 
 ### Amélioré

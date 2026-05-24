@@ -1,5 +1,3 @@
-import React, { useState, useEffect } from 'react';
-import { API_BASE } from '../constants';
 // ============================================================================
 // Demeter — Assistant IA desktop
 // ============================================================================
@@ -14,6 +12,21 @@ import { API_BASE } from '../constants';
 // ============================================================================
 
 
+import React, { useState, useEffect } from 'react';
+import { API_BASE } from '../constants';
+
+// Applique immédiatement les préférences de police sur :root pour preview live
+function applyFontPrefs(fontFamily?: string, fontSize?: number) {
+  const FONT_STACKS: Record<string, string> = {
+    'dm-sans':     "'DM Sans', sans-serif",
+    'inter':       "'Inter', sans-serif",
+    'system-ui':   "system-ui, -apple-system, sans-serif",
+    'ubuntu':      "'Ubuntu', 'Cantarell', sans-serif",
+  };
+  const root = document.documentElement;
+  root.style.setProperty('--font-body', FONT_STACKS[fontFamily ?? 'dm-sans'] ?? FONT_STACKS['dm-sans']);
+  root.style.setProperty('--font-size-base', `${fontSize ?? 14}px`);
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -23,6 +36,8 @@ export interface Settings {
   model: string;
   tavily_key?: string;
   mcp_servers?: string[];
+  font_family?: string;
+  font_size?: number;
 }
 
 interface McpTool {
@@ -36,6 +51,22 @@ interface McpServerStatus {
   tools: McpTool[];
   tool_count: number;
 }
+
+// ── Préréglages de polices ─────────────────────────────────────────────────────
+const FONT_PRESETS = [
+  { id: 'dm-sans',      label: 'DM Sans',        stack: "'DM Sans', sans-serif",           hint: 'Défaut' },
+  { id: 'inter',        label: 'Inter',           stack: "'Inter', sans-serif",             hint: 'Windows / Chrome OS' },
+  { id: 'system-ui',   label: 'Système',         stack: "system-ui, -apple-system, sans-serif", hint: 'macOS / iOS natif' },
+  { id: 'ubuntu',       label: 'Ubuntu',          stack: "'Ubuntu', 'Cantarell', sans-serif", hint: 'Linux / GNOME' },
+] as const;
+
+const FONT_SIZES = [
+  { label: 'XS', value: 12 },
+  { label: 'S',  value: 13 },
+  { label: 'M',  value: 14, hint: 'défaut' },
+  { label: 'L',  value: 15 },
+  { label: 'XL', value: 16 },
+] as const;
 
 // ── SettingsModal ─────────────────────────────────────────────────────────────
 
@@ -111,7 +142,62 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
               <input className="field-input" type="password" value={form.tavily_key || ''} onChange={update('tavily_key')} placeholder="tvly-…" />
             </div>
 
-            <div className="settings-section-title" style={{ marginTop: 16 }}>Espaces &amp; prompts</div>
+            <div className="settings-section-title" style={{ marginTop: 16 }}>Apparence</div>
+
+            {/* Police */}
+            <div className="field-group">
+              <label className="field-label">Police de caractères</label>
+              <div className="font-preset-row">
+                {FONT_PRESETS.map(fp => (
+                  <button
+                    key={fp.id}
+                    className={`font-preset-btn${(form.font_family ?? 'dm-sans') === fp.id ? ' font-preset-btn--active' : ''}`}
+                    style={{ fontFamily: fp.stack }}
+                    onClick={() => {
+                      const next = { ...form, font_family: fp.id };
+                      setForm(next);
+                      applyFontPrefs(fp.id, next.font_size);
+                    }}
+                    title={fp.hint}
+                  >
+                    <span className="font-preset-name">{fp.label}</span>
+                    <span className="font-preset-hint">{fp.hint}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Taille */}
+            <div className="field-group">
+              <label className="field-label">Taille du texte</label>
+              <div className="font-size-row">
+                {FONT_SIZES.map(fs => (
+                  <button
+                    key={fs.value}
+                    className={`font-size-btn${(form.font_size ?? 14) === fs.value ? ' font-size-btn--active' : ''}`}
+                    onClick={() => {
+                      const next = { ...form, font_size: fs.value };
+                      setForm(next);
+                      applyFontPrefs(next.font_family, fs.value);
+                    }}
+                    title={`${fs.value}px${'hint' in fs && fs.hint ? ' — ' + fs.hint : ''}`}
+                  >
+                    <span style={{ fontSize: fs.value }}>{fs.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Aperçu */}
+            <div
+              className="font-preview"
+              style={{
+                fontFamily: FONT_PRESETS.find(fp => fp.id === (form.font_family ?? 'dm-sans'))?.stack,
+                fontSize: form.font_size ?? 14,
+              }}
+            >
+              Voici un aperçu de votre police — <em>italique</em>, <strong>gras</strong>, chiffres 0123.
+            </div>
             <div className="field-hint" style={{ marginBottom: 10 }}>
               <span className="hint-icon">⚠️</span>
               <span>Réinitialise les espaces et prompts aux valeurs d'usine embarquées dans le binaire.</span>

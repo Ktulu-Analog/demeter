@@ -22,27 +22,126 @@ import * as echarts from 'echarts';
 import mermaid from 'mermaid';
 
 // ── Mermaid initialization (once) ────────────────────────────────────────────
+// ── Mermaid theme — synchronisé avec les variables CSS de l'app ─────────────
+// Light  : bg-primary=#ffffff  text-primary=#111111  border-medium=rgba(0,0,0,0.16)
+// Dark   : bg-primary=#1a1a1a  text-primary=#f0f0f0  border-medium=rgba(255,255,255,0.14)
+const _darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+function _getMermaidThemeVars(dark: boolean) {
+  return dark
+    ? {
+        // ── Dark ──────────────────────────────────────────────────────────
+        background:              '#1a1a1a',
+        primaryColor:            '#2e2e2e',   // bg-hover
+        primaryTextColor:        '#f0f0f0',   // text-primary
+        primaryBorderColor:      'rgba(255,255,255,0.14)', // border-medium
+        secondaryColor:          '#242424',   // bg-secondary
+        secondaryTextColor:      '#aaaaaa',   // text-secondary
+        secondaryBorderColor:    'rgba(255,255,255,0.07)', // border-light
+        tertiaryColor:           '#111111',   // bg-tertiary
+        tertiaryTextColor:       '#aaaaaa',
+        tertiaryBorderColor:     'rgba(255,255,255,0.07)',
+        lineColor:               '#aaaaaa',   // text-secondary
+        edgeLabelBackground:     '#242424',
+        mainBkg:                 '#2e2e2e',
+        nodeBorder:              'rgba(255,255,255,0.14)',
+        clusterBkg:              '#242424',
+        clusterBorder:           'rgba(255,255,255,0.07)',
+        titleColor:              '#f0f0f0',
+        fontSize:                '13px',
+        // Sequence diagrams
+        actorBkg:                '#2e2e2e',
+        actorBorder:             'rgba(255,255,255,0.14)',
+        actorTextColor:          '#f0f0f0',
+        actorLineColor:          '#aaaaaa',
+        signalColor:             '#aaaaaa',
+        signalTextColor:         '#f0f0f0',
+        labelBoxBkgColor:        '#242424',
+        labelBoxBorderColor:     'rgba(255,255,255,0.07)',
+        labelTextColor:          '#aaaaaa',
+        loopTextColor:           '#aaaaaa',
+        noteBkgColor:            '#2e2e2e',
+        noteBorderColor:         'rgba(255,255,255,0.14)',
+        noteTextColor:           '#aaaaaa',
+        activationBorderColor:   'rgba(255,255,255,0.14)',
+        activationBkgColor:      '#242424',
+        // Gantt
+        gridColor:               'rgba(255,255,255,0.07)',
+        section0:                '#2e2e2e',
+        section1:                '#242424',
+        section2:                '#1a1a1a',
+        section3:                '#111111',
+        taskBorderColor:         'rgba(255,255,255,0.14)',
+        taskBkgColor:            '#2e2e2e',
+        taskTextColor:           '#f0f0f0',
+        taskTextOutsideColor:    '#aaaaaa',
+        todayLineColor:          '#dddddd',  // green-dark (dark)
+      }
+    : {
+        // ── Light ─────────────────────────────────────────────────────────
+        background:              '#ffffff',
+        primaryColor:            '#f0f0f0',   // bg-hover / green-light
+        primaryTextColor:        '#111111',   // text-primary
+        primaryBorderColor:      'rgba(0,0,0,0.16)', // border-medium
+        secondaryColor:          '#f4f4f4',   // bg-secondary
+        secondaryTextColor:      '#555555',   // text-secondary
+        secondaryBorderColor:    'rgba(0,0,0,0.08)', // border-light
+        tertiaryColor:           '#e8e8e8',   // bg-tertiary
+        tertiaryTextColor:       '#555555',
+        tertiaryBorderColor:     'rgba(0,0,0,0.08)',
+        lineColor:               '#555555',   // text-secondary
+        edgeLabelBackground:     '#ffffff',
+        mainBkg:                 '#f0f0f0',
+        nodeBorder:              'rgba(0,0,0,0.16)',
+        clusterBkg:              '#f4f4f4',
+        clusterBorder:           'rgba(0,0,0,0.08)',
+        titleColor:              '#111111',
+        fontSize:                '13px',
+        // Sequence diagrams
+        actorBkg:                '#f0f0f0',
+        actorBorder:             'rgba(0,0,0,0.16)',
+        actorTextColor:          '#111111',
+        actorLineColor:          '#555555',
+        signalColor:             '#555555',
+        signalTextColor:         '#111111',
+        labelBoxBkgColor:        '#f4f4f4',
+        labelBoxBorderColor:     'rgba(0,0,0,0.08)',
+        labelTextColor:          '#555555',
+        loopTextColor:           '#555555',
+        noteBkgColor:            '#f4f4f4',
+        noteBorderColor:         'rgba(0,0,0,0.16)',
+        noteTextColor:           '#555555',
+        activationBorderColor:   'rgba(0,0,0,0.16)',
+        activationBkgColor:      '#e8e8e8',
+        // Gantt
+        gridColor:               'rgba(0,0,0,0.08)',
+        section0:                '#f0f0f0',
+        section1:                '#e8e8e8',
+        section2:                '#f4f4f4',
+        section3:                '#ffffff',
+        taskBorderColor:         'rgba(0,0,0,0.16)',
+        taskBkgColor:            '#f0f0f0',
+        taskTextColor:           '#111111',
+        taskTextOutsideColor:    '#555555',
+        todayLineColor:          '#111111',  // text-primary
+      };
+}
 mermaid.initialize({
   startOnLoad: false,
   theme: 'base',
   securityLevel: 'loose',
   suppressErrorRendering: true,
-  themeVariables: {
-    primaryColor: '#374151', primaryTextColor: '#f9fafb', primaryBorderColor: '#1f2937',
-    secondaryColor: '#e5e7eb', secondaryTextColor: '#111827', secondaryBorderColor: '#9ca3af',
-    tertiaryColor: '#f3f4f6', tertiaryTextColor: '#374151', tertiaryBorderColor: '#d1d5db',
-    lineColor: '#6b7280', edgeLabelBackground: '#ffffff',
-    background: '#ffffff', mainBkg: '#374151', nodeBorder: '#1f2937',
-    clusterBkg: '#f9fafb', clusterBorder: '#d1d5db', titleColor: '#111827', fontSize: '14px',
-    actorBkg: '#374151', actorBorder: '#1f2937', actorTextColor: '#f9fafb', actorLineColor: '#9ca3af',
-    signalColor: '#374151', signalTextColor: '#111827',
-    labelBoxBkgColor: '#f3f4f6', labelBoxBorderColor: '#d1d5db', labelTextColor: '#374151',
-    loopTextColor: '#374151', noteBorderColor: '#9ca3af', noteBkgColor: '#f9fafb', noteTextColor: '#374151',
-    activationBorderColor: '#374151', activationBkgColor: '#e5e7eb',
-    gridColor: '#e5e7eb', section0: '#374151', section1: '#4b5563', section2: '#6b7280', section3: '#9ca3af',
-    taskBorderColor: '#1f2937', taskBkgColor: '#374151', taskTextColor: '#f9fafb',
-    taskTextOutsideColor: '#111827', todayLineColor: '#111827',
-  },
+  themeVariables: _getMermaidThemeVars(_darkMq.matches),
+});
+
+// Re-init Mermaid whenever the OS color-scheme flips
+_darkMq.addEventListener('change', (e) => {
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: 'base',
+    securityLevel: 'loose',
+    suppressErrorRendering: true,
+    themeVariables: _getMermaidThemeVars(e.matches),
+  });
 });
 
 let _mermaidRenderCounter = 0;

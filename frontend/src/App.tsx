@@ -28,9 +28,25 @@ import { SettingsModal, McpStatusPanel, AboutModal } from './components/Modals';
 import type { Settings } from './components/Modals';
 import { PromptsEditorModal } from './components/PromptsEditorModal';
 import { IngestionModal } from './components/IngestionModal';
+import { CompareModeView } from './components/CompareMode';
+import './components/CompareMode.css';
 import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
 
 const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', tavily_key: '', mcp_servers: [] };
+
+// Applique immédiatement les préférences de police sur :root
+// Appelé au démarrage ET à chaque changement dans les settings
+function applyFontPrefs(fontFamily?: string, fontSize?: number) {
+  const FONT_STACKS: Record<string, string> = {
+    'dm-sans':   "'DM Sans', sans-serif",
+    'inter':     "'Inter', sans-serif",
+    'system-ui': "system-ui, -apple-system, sans-serif",
+    'ubuntu':    "'Ubuntu', 'Cantarell', sans-serif",
+  };
+  const root = document.documentElement;
+  root.style.setProperty('--font-body', FONT_STACKS[fontFamily ?? 'dm-sans'] ?? FONT_STACKS['dm-sans']);
+  root.style.setProperty('--font-size-base', `${fontSize ?? 14}px`);
+}
 
 export default function App() {
   return (
@@ -59,7 +75,9 @@ function AppInner() {
   const [settings, setSettings] = useState<Settings>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('demeter_settings') || '{}');
-      return { ...DEFAULT_SETTINGS, ...saved };
+      const s = { ...DEFAULT_SETTINGS, ...saved };
+      applyFontPrefs(s.font_family, s.font_size); // ← appliqué avant le 1er rendu
+      return s;
     } catch { return DEFAULT_SETTINGS; }
   });
   const initCredentials = (s: Settings) => {
@@ -69,6 +87,7 @@ function AppInner() {
   };
 
   const saveSettings = (s: Settings) => {
+    applyFontPrefs(s.font_family, s.font_size);
     setSettings(s);
     localStorage.setItem('demeter_settings', JSON.stringify(s));
     initCredentials(s);
@@ -82,6 +101,7 @@ function AppInner() {
   const [showIngestion,     setShowIngestion]      = useState(false);
   const [showPromptsEditor, setShowPromptsEditor]  = useState(false);
   const [showAbout,         setShowAbout]          = useState(false);
+  const [showCompare,       setShowCompare]        = useState(false);
 
   const [spaceAssignments, setSpaceAssignments] = useState<Record<string, number | null>>(() => {
     try { return JSON.parse(localStorage.getItem('demeter_space_assignments') || '{}'); } catch { return {}; }
@@ -105,6 +125,7 @@ function AppInner() {
   const [artifactsMsgIndex, setArtifactsMsgIndex] = useState<number | null>(null);
 
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelMaxCtx,     setModelMaxCtx]     = useState<Record<string, number>>({});
   const [activeModel,     setActiveModel]     = useState('');
   const [modelDropOpen,   setModelDropOpen]   = useState(false);
   const modelDropRef = useRef<HTMLDivElement>(null);
@@ -120,6 +141,8 @@ function AppInner() {
 
   const abortControllerRef  = useRef<AbortController | null>(null);
   const chatEndRef          = useRef<HTMLDivElement>(null);
+  const chatAreaRef         = useRef<HTMLDivElement>(null);
+  const [showScrollBtn, setShowScrollBtn] = useState(false);
   const fileInputRef        = useRef<HTMLInputElement>(null);
   const currentConvIdRef    = useRef(currentConvId);
   const currentConvTitleRef = useRef(currentConvTitle);
@@ -187,9 +210,12 @@ function AppInner() {
     if (!settings.endpoint || !settings.bearer) return;
     fetch(`${API_BASE}/api-proxy/api/models?endpoint=${encodeURIComponent(settings.endpoint)}`)
       .then(r => r.ok ? r.json() : null)
-      .then((data: { data?: { id: string }[] } | null) => {
+      .then((data: { data?: { id: string; max_context_length?: number }[] } | null) => {
         const ids = data?.data?.map(m => m.id).filter(Boolean) || [];
         setAvailableModels(ids);
+        const ctxMap: Record<string, number> = {};
+        data?.data?.forEach(m => { if (m.id && m.max_context_length) ctxMap[m.id] = m.max_context_length; });
+        setModelMaxCtx(ctxMap);
         if (ids.length && !activeModel) setActiveModel(settings.model || ids[0]);
       }).catch(() => {});
   }, [settings.endpoint, settings.bearer, settings.model]);
@@ -222,6 +248,7 @@ function AppInner() {
       if (id === 'rag')            setShowIngestion(true);
       if (id === 'about')          setShowAbout(true);
       if (id === 'toggle_sidebar') setSidebarOpen(v => !v);
+      if (id === 'compare')        setShowCompare(true);
     };
     window.addEventListener('tauri-menu', handler as EventListener);
     return () => window.removeEventListener('tauri-menu', handler as EventListener);
@@ -231,6 +258,21 @@ function AppInner() {
   useEffect(() => {
     if (messages.some(m => m.streaming)) chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // Affiche/masque le bouton "aller en bas"
+  useEffect(() => {
+    const el = chatAreaRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowScrollBtn(distanceFromBottom > 120);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener('scroll', onScroll);
+  }, []);
+
+  const scrollToBottom = () => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 
   const prevStreamingRef = useRef(false);
   useEffect(() => {
@@ -495,6 +537,24 @@ function AppInner() {
     return null;
   })();
 
+  // Injecte les turns d'une session de comparaison dans le chat principal
+  // et ferme le mode comparaison.
+  const handleSelectResponse = useCallback((
+    compareTurns: import('./components/CompareMode').CompareTurn[],
+    chosenSlotIndex: 0 | 1,
+  ) => {
+    const injected: ChatMessage[] = [];
+    for (let i = 0; i < compareTurns.length; i++) {
+      const t = compareTurns[i];
+      injected.push({ role: 'user', content: t.userContent, displayContent: t.displayContent });
+      // Pour le dernier turn : slot retenu par l'utilisateur ; pour les précédents : slot A comme contexte.
+      const slot = i === compareTurns.length - 1 ? t.slots[chosenSlotIndex] : t.slots[0];
+      injected.push({ role: 'assistant', content: slot.content });
+    }
+    setMessages(prev => [...prev, ...injected]);
+    setShowCompare(false);
+  }, []);
+
   return (
     <div className="layout">
       {showSettings      && <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettings(false)} />}
@@ -502,6 +562,23 @@ function AppInner() {
       {showIngestion     && <IngestionModal settings={settings} spaces={spaces} onClose={() => { setShowIngestion(false); reloadAssignments(); }} />}
       {showPromptsEditor && <PromptsEditorModal onClose={() => setShowPromptsEditor(false)} onSpacesUpdated={reloadSpaces} />}
       {showAbout         && <AboutModal onClose={() => setShowAbout(false)} />}
+      {showCompare       && (
+        <CompareModeView
+          settings={settings}
+          availableModels={availableModels}
+          modelMaxCtx={modelMaxCtx}
+          activeSpace={activeSpace}
+          webSearch={webSearch}
+          onWebSearchChange={setWebSearch}
+          collectionId={activeSpace?.id ? (spaceAssignments[activeSpace.id] ?? null) : null}
+          attachments={attachments}
+          onAttachmentsChange={setAttachments}
+          onFilePickerClick={() => fileInputRef.current?.click()}
+          extracting={extracting}
+          onSelectResponse={handleSelectResponse}
+          onClose={() => setShowCompare(false)}
+        />
+      )}
 
       <aside className={`sidebar${sidebarOpen ? '' : ' sidebar--closed'}`}>
         <div className="sidebar-logo"><div className="brand-wrap"><div><div className="brand">Demeter</div><div className="tagline">Assistant RH intelligent</div></div></div></div>
@@ -582,6 +659,16 @@ function AppInner() {
                 Artéfacts
               </button>
             )}
+            {availableModels.length >= 2 && configured && (
+              <button
+                className={`artifacts-toggle-btn${showCompare ? ' artifacts-toggle-btn--active' : ''}`}
+                onClick={() => setShowCompare(v => !v)}
+                title="Comparer deux modèles côte à côte"
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M1 2h6v12H1V2zm8 0h6v12H9V2zM2 3v10h4V3H2zm8 0v10h4V3h-4z"/></svg>
+                Comparer
+              </button>
+            )}
             {currentUser && <span className="badge badge-green" style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>👤 {currentUser.name || currentUser.email}</span>}
             {configured ? (
               availableModels.length > 1 ? (
@@ -619,7 +706,7 @@ function AppInner() {
 
         <div className="chat-artifacts-wrapper">
           <div className="chat-column">
-            <div className="chat-area">
+            <div className="chat-area" ref={chatAreaRef}>
               {messages.length === 0 && (
                 <div className="welcome">
                   <div className="welcome-logo"><img src="/ico-demeter.png" alt="Demeter" className="welcome-logo-img" /></div>
@@ -653,6 +740,14 @@ function AppInner() {
               ))}
               <div ref={chatEndRef} style={{ overflowAnchor: 'none', height: 1 }} />
             </div>
+
+            {showScrollBtn && (
+              <button className="scroll-to-bottom-btn" onClick={scrollToBottom} title="Aller en bas">
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                  <path d="M8 10.5L2.5 5h11L8 10.5z"/>
+                </svg>
+              </button>
+            )}
 
             <div className="input-zone">
               <input ref={fileInputRef} type="file" accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.webp" style={{ display: 'none' }} multiple onChange={handleFileChange} />

@@ -19,18 +19,33 @@ export interface RagSource {
   index: number;
   source?: string;
   page?: number | string;
+  score?: number;
   rerank_score?: number;
+}
+
+// Groupe les chunks par fichier source pour l'affichage, tout en conservant
+// tous les index cités par le LLM (pas de déduplication).
+interface SourceGroup {
+  filename: string;
+  chunks: RagSource[];
+}
+
+function groupBySource(sources: RagSource[]): SourceGroup[] {
+  const map = new Map<string, RagSource[]>();
+  for (const s of sources) {
+    const key = s.source ? s.source.split('/').pop()! : '(source inconnue)';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(s);
+  }
+  return Array.from(map.entries()).map(([filename, chunks]) => ({ filename, chunks }));
 }
 
 export function RagSourcesBadge({ sources }: { sources: RagSource[] }) {
   const [open, setOpen] = useState(false);
   if (!sources || sources.length === 0) return null;
 
-  const unique = sources.reduce<RagSource[]>((acc, s) => {
-    const key = s.source || '(inconnu)';
-    if (!acc.find(x => x.source === key)) acc.push(s);
-    return acc;
-  }, []);
+  const groups = groupBySource(sources);
+  const total  = sources.length;
 
   return (
     <div className="rag-badge-wrapper">
@@ -42,7 +57,7 @@ export function RagSourcesBadge({ sources }: { sources: RagSource[] }) {
         <svg viewBox="0 0 16 16" width="11" height="11" fill="currentColor">
           <path d="M2 2a1 1 0 011-1h6.5l4.5 4.5V14a1 1 0 01-1 1H3a1 1 0 01-1-1V2zm8 0v3.5H13L10 2zM4 7h8v1H4V7zm0 2h8v1H4V9zm0 2h5v1H4v-1z"/>
         </svg>
-        {unique.length} source{unique.length > 1 ? 's' : ''} RAG
+        {total} extrait{total > 1 ? 's' : ''} · {groups.length} fichier{groups.length > 1 ? 's' : ''}
         <svg
           viewBox="0 0 16 16" width="9" height="9" fill="currentColor"
           style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform .2s' }}
@@ -54,18 +69,25 @@ export function RagSourcesBadge({ sources }: { sources: RagSource[] }) {
         <div className="rag-badge-panel">
           <div className="rag-badge-title">Documents consultés</div>
           <ul className="rag-badge-list">
-            {sources.map((s, i) => (
-              <li key={i} className="rag-badge-item">
-                <span className="rag-badge-idx">[{s.index}]</span>
-                <span className="rag-badge-source">
-                  {s.source ? s.source.split('/').pop() : '(source inconnue)'}
-                  {s.page ? <span className="rag-badge-page">, p.{s.page}</span> : null}
+            {groups.map((g, gi) => (
+              <li key={gi} className="rag-badge-item rag-badge-item--group">
+                <span className="rag-badge-source">{g.filename}</span>
+                <span className="rag-badge-indexes">
+                  {g.chunks.map((c, ci) => {
+                    const parts: string[] = [];
+                    if (c.page)         parts.push(`Page ${c.page}`);
+                    if (c.rerank_score != null)
+                      parts.push(`Pertinence (rerank) : ${(c.rerank_score * 100).toFixed(1)} %`);
+                    if (c.score != null)
+                      parts.push(`Score vectoriel : ${(c.score * 100).toFixed(1)} %`);
+                    const tip = parts.join(' · ');
+                    return (
+                      <span key={ci} className="rag-badge-idx" title={tip || undefined}>
+                        [{c.index}]{c.page ? <span className="rag-badge-page"> p.{c.page}</span> : null}
+                      </span>
+                    );
+                  })}
                 </span>
-                {s.rerank_score != null && (
-                  <span className="rag-badge-score" title="Score de pertinence">
-                    {(s.rerank_score * 100).toFixed(0)}%
-                  </span>
-                )}
               </li>
             ))}
           </ul>
