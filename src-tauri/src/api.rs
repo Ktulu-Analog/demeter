@@ -69,18 +69,57 @@ SEULS les délimiteurs $ et $$ sont reconnus par le moteur de rendu.
 ──────────────────────────────────────────
 "#;
 
-const ECHARTS_INSTRUCTION: &str = r#"
+const ECHARTS_INSTRUCTION: &str = r##"
 
 ──────────────────────────────────────────
 RENDU DE GRAPHIQUES
 Quand une réponse bénéficierait d'une visualisation, insère un bloc "echarts" contenant un objet JSON valide.
-Règles STRICTES : JSON RFC 8259 pur, toutes les clés entre guillemets doubles, aucun commentaire (ni // ni /* */), pas d'apostrophes comme délimiteurs de chaîne, pas de virgule après le dernier élément, pas de fonctions JS. Les chaînes de caractères utilisent exclusivement les guillemets doubles.
-Exemple minimal valide :
+
+RÈGLES JSON STRICTES : JSON RFC 8259 pur, toutes les clés entre guillemets doubles, aucun commentaire (ni // ni /* */), pas d'apostrophes comme délimiteurs de chaîne, pas de virgule après le dernier élément, pas de fonctions JS.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+MISE EN PAGE INTELLIGENTE — règles obligatoires
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TITRE :
+- Toujours présent. "left":"center", "top":"2%".
+- Si un sous-titre est utile (total, date…) : "subtext":"…", "subtextStyle":{"color":"#888","fontSize":11}.
+
+LÉGENDE :
+- CAMEMBERT ≤ 6 séries : "legend":{"orient":"vertical","right":"5%","top":"middle"}.
+  Le centre du pie doit être décalé à gauche : "center":["38%","54%"].
+- CAMEMBERT ≥ 7 séries : supprimer la légende ("legend":{"show":false}).
+  Utiliser des labels extérieurs : "label":{"show":true,"position":"outside","formatter":"{b}: {d}%","overflow":"truncate","width":110}
+  et "labelLine":{"length":8,"length2":6} et "labelLayout":{"hideOverlap":true}.
+- BARRES / LIGNES : "legend":{"bottom":"2%","type":"scroll"}.
+
+CAMEMBERT (pie) — règles supplémentaires :
+- "avoidLabelOverlap":true TOUJOURS présent.
+- Pie plein : "radius":["0%","55%"]. Donut : "radius":["35%","60%"].
+- "center":["50%","54%"] par défaut ; ["38%","54%"] quand la légende est verticale à droite.
+- Si ≥ 7 séries, réduire : "radius":["0%","47%"], "center":["42%","54%"].
+- Ne jamais utiliser "label":{"position":"inner"} avec plus de 5 séries.
+
+BARRES HORIZONTALES (bar + yAxis category) :
+- "grid":{"left":"28%","right":"12%","top":"14%","bottom":"12%"}.
+- "yAxis":{"axisLabel":{"overflow":"truncate","width":160}}.
+
+BARRES VERTICALES / LIGNES :
+- "grid":{"left":"8%","right":"6%","top":"14%","bottom":"18%"}.
+- Si > 6 catégories : "xAxis":{"axisLabel":{"rotate":30,"overflow":"truncate","width":80}}.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Exemple camembert 8 séries (correct) :
 ```echarts
-{"title":{"text":"Exemple"},"xAxis":{"data":["A","B"]},"yAxis":{},"series":[{"type":"bar","data":[1,2]}]}
+{"title":{"text":"Répartition","left":"center","top":"2%","subtext":"Total : 31","subtextStyle":{"color":"#888","fontSize":11}},"tooltip":{"trigger":"item","formatter":"{b}: {c} ({d}%)"},"legend":{"show":false},"series":[{"type":"pie","radius":["0%","47%"],"center":["42%","54%"],"avoidLabelOverlap":true,"label":{"show":true,"position":"outside","formatter":"{b}: {d}%","overflow":"truncate","width":110},"labelLine":{"length":8,"length2":6},"labelLayout":{"hideOverlap":true},"data":[{"value":8,"name":"Intérieur"},{"value":3,"name":"Justice"}]}]}
+```
+
+Exemple camembert 4 séries (avec légende) :
+```echarts
+{"title":{"text":"Répartition","left":"center","top":"2%"},"tooltip":{"trigger":"item","formatter":"{b}: {c} ({d}%)"},"legend":{"orient":"vertical","right":"5%","top":"middle"},"series":[{"type":"pie","radius":["0%","55%"],"center":["38%","54%"],"avoidLabelOverlap":true,"label":{"show":false},"data":[{"value":40,"name":"A"},{"value":30,"name":"B"},{"value":20,"name":"C"},{"value":10,"name":"D"}]}]}
 ```
 ──────────────────────────────────────────
-"#;
+"##;
 
 const MERMAID_INSTRUCTION: &str = r#"
 

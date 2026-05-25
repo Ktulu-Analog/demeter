@@ -265,8 +265,9 @@ interface McpStatusPanelProps {
 }
 
 export function McpStatusPanel({ servers, onClose }: McpStatusPanelProps) {
-  const [statuses, setStatuses] = useState<McpServerStatus[] | null>(null);
-  const [loading, setLoading]   = useState(true);
+  const [statuses, setStatuses]   = useState<McpServerStatus[] | null>(null);
+  const [loading, setLoading]     = useState(true);
+  const [expanded, setExpanded]   = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     if (!servers || servers.length === 0) { setLoading(false); setStatuses([]); return; }
@@ -282,15 +283,32 @@ export function McpStatusPanel({ servers, onClose }: McpStatusPanelProps) {
       .finally(() => setLoading(false));
   }, [servers]);
 
+  const toggleExpanded = (i: number) =>
+    setExpanded(prev => ({ ...prev, [i]: !prev[i] }));
+
+  /** Truncate a URL to a short display name */
+  const shortName = (url: string) => {
+    try {
+      const u = new URL(url);
+      return u.hostname.replace(/^www\./, '');
+    } catch {
+      return url.length > 40 ? url.slice(0, 37) + '…' : url;
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal mcp-status-modal" onClick={e => e.stopPropagation()} style={{ width: 560 }}>
+      <div className="modal mcp-status-modal" onClick={e => e.stopPropagation()} style={{ width: 580 }}>
         <div className="modal-header">
           <span className="modal-title">🔌 Serveurs MCP actifs</span>
           <button className="icon-btn" onClick={onClose}>✕</button>
         </div>
-        <div className="modal-body">
-          {loading && <div style={{ textAlign: 'center', padding: '24px 0', opacity: .6 }}>Connexion aux serveurs…</div>}
+        <div className="modal-body mcp-modal-body">
+          {loading && (
+            <div style={{ textAlign: 'center', padding: '24px 0', opacity: .6 }}>
+              Connexion aux serveurs…
+            </div>
+          )}
           {!loading && (!statuses || statuses.length === 0) && (
             <div style={{ textAlign: 'center', padding: '24px 0', opacity: .6 }}>
               <div style={{ fontSize: 32, marginBottom: 8 }}>🔌</div>
@@ -298,25 +316,44 @@ export function McpStatusPanel({ servers, onClose }: McpStatusPanelProps) {
               <span style={{ fontSize: 12 }}>Ajoutez des serveurs dans les Paramètres.</span>
             </div>
           )}
-          {!loading && statuses && statuses.map((srv, i) => (
-            <div key={i} className={`mcp-status-card mcp-status-card--${srv.status}`}>
-              <div className="mcp-status-header">
-                <span className={`mcp-status-dot mcp-status-dot--${srv.status}`} />
-                <span className="mcp-status-url">{srv.server}</span>
-                <span className="mcp-status-badge">{srv.status === 'ok' ? `${srv.tool_count} outil${srv.tool_count > 1 ? 's' : ''}` : 'Injoignable'}</span>
+          {!loading && statuses && statuses.map((srv, i) => {
+            const open = !!expanded[i];
+            const hasTools = srv.tools?.length > 0;
+            return (
+              <div key={i} className={`mcp-pill-card mcp-pill-card--${srv.status}`}>
+                {/* ── Pill header (always visible) ── */}
+                <button
+                  className="mcp-pill-header"
+                  onClick={() => hasTools && toggleExpanded(i)}
+                  aria-expanded={open}
+                  style={{ cursor: hasTools ? 'pointer' : 'default' }}
+                >
+                  <span className={`mcp-status-dot mcp-status-dot--${srv.status}`} />
+                  <span className="mcp-pill-name" title={srv.server}>{shortName(srv.server)}</span>
+                  <span className={`mcp-pill-badge mcp-pill-badge--${srv.status}`}>
+                    {srv.status === 'ok'
+                      ? `${srv.tool_count} outil${srv.tool_count !== 1 ? 's' : ''}`
+                      : 'Injoignable'}
+                  </span>
+                  {hasTools && (
+                    <span className={`mcp-pill-chevron${open ? ' mcp-pill-chevron--open' : ''}`}>▾</span>
+                  )}
+                </button>
+
+                {/* ── Collapsible tools list ── */}
+                {open && hasTools && (
+                  <div className="mcp-pill-tools">
+                    {srv.tools.map((t, j) => (
+                      <div key={j} className="mcp-tool-item">
+                        <span className="mcp-tool-name">{t.name}</span>
+                        {t.description && <span className="mcp-tool-desc">{t.description}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              {srv.tools?.length > 0 && (
-                <div className="mcp-tools-list">
-                  {srv.tools.map((t, j) => (
-                    <div key={j} className="mcp-tool-item">
-                      <span className="mcp-tool-name">{t.name}</span>
-                      {t.description && <span className="mcp-tool-desc">{t.description}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
         <div className="modal-footer">
           <button className="btn-ghost" onClick={onClose}>Fermer</button>
