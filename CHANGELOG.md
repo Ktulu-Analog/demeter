@@ -6,6 +6,13 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 
 ---
+## [2.1.1] — 2026-05-26
+
+### Amélioré
+
+- **config MCP** — les serveurs MCP s'affichent correctement dans la fenêtre dédiée.
+
+---
 
 ## [2.1.0] — 2026-05-24
 

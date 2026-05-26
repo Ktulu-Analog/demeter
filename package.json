@@ -1,6 +1,6 @@
 {
   "name": "demeter-tauri",
-  "version": "2.0.1",
+  "version": "2.1.1",
   "private": true,
   "scripts": {
     "dev": "cd frontend && npm run dev",
