@@ -74,5 +74,5 @@ jobs:
             Voir [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) pour les détails.
           releaseDraft: false
           prerelease: false
-          projectPath: .
+          projectPath: src-tauri
           tauriScript: npx tauri
