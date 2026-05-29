@@ -149,4 +149,3 @@ pub fn timeout_image_proxy() -> Duration {
 pub fn timeout_models() -> Duration {
     Duration::from_secs(env_u64("TIMEOUT_MODELS_SECS", 8))
 }
-

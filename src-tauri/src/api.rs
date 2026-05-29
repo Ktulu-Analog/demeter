@@ -736,14 +736,16 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
 
                     // Si le tool a retourné une image, l'émettre immédiatement via SSE
                     // avant de repasser au LLM (qui ne reçoit que le texte).
-                    if let (Some(b64), Some(mime)) = (&mcp_result.image_b64, &mcp_result.image_mime) {
+                    if let (Some(b64), Some(mime)) = (&mcp_result.image_b64, &mcp_result.image_mime)
+                    {
                         let img_event = format!(
                             "event: mcp_image\ndata: {}\n\n",
                             serde_json::to_string(&serde_json::json!({
                                 "b64":  b64,
                                 "mime": mime,
                                 "alt":  &mcp_result.text,
-                            })).unwrap_or_default()
+                            }))
+                            .unwrap_or_default()
                         );
                         pending_sse_events.push(bytes::Bytes::from(img_event));
                     }
@@ -881,20 +883,24 @@ async fn mcp_list_tools(Json(req): Json<McpListRequest>) -> Response {
         .unwrap_or_default();
 
     // Appels parallèles — plus d'attente séquentielle
-    let futures: Vec<_> = req.servers.iter().map(|server| {
-        let client = client.clone();
-        let server = server.clone();
-        async move {
-            let (tools, ok) = crate::mcp::list_tools(&client, &server).await;
-            let count = tools.len();
-            json!({
-                "server": server,
-                "status": if ok { "ok" } else { "error" },
-                "tools": tools,
-                "tool_count": count,
-            })
-        }
-    }).collect();
+    let futures: Vec<_> = req
+        .servers
+        .iter()
+        .map(|server| {
+            let client = client.clone();
+            let server = server.clone();
+            async move {
+                let (tools, ok) = crate::mcp::list_tools(&client, &server).await;
+                let count = tools.len();
+                json!({
+                    "server": server,
+                    "status": if ok { "ok" } else { "error" },
+                    "tools": tools,
+                    "tool_count": count,
+                })
+            }
+        })
+        .collect();
 
     let result = futures::future::join_all(futures).await;
     Json(json!({ "servers": result })).into_response()

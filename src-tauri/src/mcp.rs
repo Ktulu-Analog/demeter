@@ -259,7 +259,11 @@ pub async fn call_tool(
         Some(data) => {
             if let Some(err) = data.get("error") {
                 warn!("MCP tools/call error: {}", err);
-                return McpToolResult { text: format!("Erreur MCP : {}", err), image_b64: None, image_mime: None };
+                return McpToolResult {
+                    text: format!("Erreur MCP : {}", err),
+                    image_b64: None,
+                    image_mime: None,
+                };
             }
             extract_content(&data["result"])
         }
@@ -268,23 +272,40 @@ pub async fn call_tool(
                 "MCP: échec d'appel du tool {} sur {}",
                 tool_name, server_url
             );
-McpToolResult { text: format!("Erreur : impossible d'appeler le tool {} sur {}", tool_name, server_url), image_b64: None, image_mime: None }
+            McpToolResult {
+                text: format!(
+                    "Erreur : impossible d'appeler le tool {} sur {}",
+                    tool_name, server_url
+                ),
+                image_b64: None,
+                image_mime: None,
+            }
         }
     }
 }
 
 /// Collecte tous les tools de tous les serveurs MCP configurés.
 pub async fn collect_all_tools(client: &Client, servers: &[String]) -> Vec<(String, Value)> {
-    let futures: Vec<_> = servers.iter().map(|server| {
-        let client = client.clone();
-        let server = server.clone();
-        async move {
-            let (tools, _ok) = list_tools(&client, &server).await;
-            info!("MCP: {} tools depuis {}", tools.len(), server);
-            tools.into_iter().map(move |t| (server.clone(), t)).collect::<Vec<_>>()
-        }
-    }).collect();
-    futures::future::join_all(futures).await.into_iter().flatten().collect()
+    let futures: Vec<_> = servers
+        .iter()
+        .map(|server| {
+            let client = client.clone();
+            let server = server.clone();
+            async move {
+                let (tools, _ok) = list_tools(&client, &server).await;
+                info!("MCP: {} tools depuis {}", tools.len(), server);
+                tools
+                    .into_iter()
+                    .map(move |t| (server.clone(), t))
+                    .collect::<Vec<_>>()
+            }
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 /// Extrait le contenu d'une réponse MCP (texte + image optionnelle).
@@ -302,7 +323,7 @@ fn extract_content(data: &Value) -> McpToolResult {
                     }
                 }
                 Some("image") => {
-                    image_b64  = block["data"].as_str().map(|s| s.to_string());
+                    image_b64 = block["data"].as_str().map(|s| s.to_string());
                     image_mime = block["mimeType"].as_str().map(|s| s.to_string());
                 }
                 _ => {}
@@ -310,15 +331,23 @@ fn extract_content(data: &Value) -> McpToolResult {
         }
 
         return McpToolResult {
-            text:       texts.join("\n"),
+            text: texts.join("\n"),
             image_b64,
             image_mime,
         };
     }
     if let Some(s) = data.as_str() {
-        return McpToolResult { text: s.to_string(), image_b64: None, image_mime: None };
+        return McpToolResult {
+            text: s.to_string(),
+            image_b64: None,
+            image_mime: None,
+        };
     }
-    McpToolResult { text: data.to_string(), image_b64: None, image_mime: None }
+    McpToolResult {
+        text: data.to_string(),
+        image_b64: None,
+        image_mime: None,
+    }
 }
 
 /// Transforme une URL en slug pour les noms de tools.
