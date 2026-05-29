@@ -24,7 +24,7 @@ import { hasArtifacts, extractArtifacts } from './utils/artifacts';
 import { Message } from './components/Message';
 import type { ChatMessage, Attachment } from './components/Message';
 import { ArtifactsPanel } from './components/ArtifactsPanel';
-import { SettingsModal, McpStatusPanel, AboutModal } from './components/Modals';
+import { SettingsModal, McpStatusPanel, AboutModal, McpTooltipButton, type McpEntry } from './components/Modals';
 import type { Settings } from './components/Modals';
 import { PromptsEditorModal } from './components/PromptsEditorModal';
 import { IngestionModal } from './components/IngestionModal';
@@ -32,7 +32,7 @@ import { CompareModeView } from './components/CompareMode';
 import './CompareMode.css';
 import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
 
-const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', tavily_key: '', mcp_servers: [] };
+const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', web_search_mcp: '', web_search_mcp_alias: '', mcp_servers: [] };
 
 // Applique immédiatement les préférences de police sur :root
 // Appelé au démarrage ET à chaque changement dans les settings
@@ -76,13 +76,19 @@ function AppInner() {
     try {
       const saved = JSON.parse(localStorage.getItem('demeter_settings') || '{}');
       const s = { ...DEFAULT_SETTINGS, ...saved };
-      applyFontPrefs(s.font_family, s.font_size); // ← appliqué avant le 1er rendu
+      // Migration : mcp_servers était string[], normalise en {url, alias}[]
+      if (Array.isArray(s.mcp_servers)) {
+        s.mcp_servers = s.mcp_servers.map((entry: unknown) =>
+          typeof entry === 'string' ? { url: entry } : entry
+        );
+      }
+      applyFontPrefs(s.font_family, s.font_size);
       return s;
     } catch { return DEFAULT_SETTINGS; }
   });
   const initCredentials = (s: Settings) => {
     (window as any).__TAURI__?.core?.invoke('init_credentials', {
-      payload: { endpoint: s.endpoint, bearer: s.bearer, tavily_key: s.tavily_key || '' }
+      payload: { endpoint: s.endpoint, bearer: s.bearer }
     })?.catch(console.error);
   };
 
@@ -433,34 +439,58 @@ function AppInner() {
       }
       const res = await fetch(`${API_BASE}/api-proxy/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
-        body: JSON.stringify({ messages: historyForApi, model: modelForRequest, stream: true, space_id: activeSpace?.id || null, web_search: webSearch, mcp_servers: settings.mcp_servers || [], ...(assignedColId ? { collection_id: assignedColId } : {}) }),
+        body: JSON.stringify({ messages: historyForApi, model: modelForRequest, stream: true, space_id: activeSpace?.id || null, mcp_servers: [...(settings.mcp_servers || []).map(s => s.url), ...(webSearch && settings.web_search_mcp ? [settings.web_search_mcp] : [])], ...(assignedColId ? { collection_id: assignedColId } : {}) }),
       });
       if (!res.ok) { throw new Error(`Erreur ${res.status} : ${await res.text()}`); }
       const reader = res.body!.getReader(); const decoder = new TextDecoder();
-      let tail = ''; let capturedUsage: Usage | null = null; let pendingEvent: string | null = null;
+      let tail = ''; let capturedUsage: Usage | null = null; let hasMcpImage = false;
+      // Parser SSE orienté blocs (séparateur \n\n) — robuste aux grands payloads
+      const dispatchSseBlock = (block: string) => {
+        let eventType: string | null = null;
+        let dataLines: string[] = [];
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event:')) { eventType = line.slice(6).trim(); }
+          else if (line.startsWith('data:'))  { dataLines.push(line.slice(5).trim()); }
+        }
+        const raw = dataLines.join(''); // les lignes data: sont concaténées (spec SSE)
+        if (!raw || raw === '[DONE]') return raw === '[DONE]' ? 'DONE' : null;
+        if (eventType === 'rag_sources') {
+          try { const p = JSON.parse(raw); if (p.sources) setMessages(prev => { const m = [...prev]; m[m.length-1] = { ...m[m.length-1], ragSources: p.sources }; return m; }); } catch { /* ignore */ }
+          return null;
+        }
+        if (eventType === 'mcp_image') {
+          try {
+            console.debug('[mcp_image] raw.length=', raw.length, 'prefix=', raw.slice(0, 40));
+            const p = JSON.parse(raw);
+            console.debug('[mcp_image] parsed OK b64_len=', p.b64?.length, 'mime=', p.mime);
+            if (p.b64 && p.mime) {
+              const bt = '```';
+              const mdImg = bt + 'screenshot\n' + JSON.stringify({ mime: p.mime, alt: p.alt || 'Screenshot' }) + '\n' + p.b64 + '\n' + bt;
+              hasMcpImage = true;
+              setMessages(prev => { const m = [...prev]; const last = m[m.length-1]; m[m.length-1] = { ...last, content: (typeof last.content === 'string' ? last.content : '') + '\n\n' + mdImg }; return m; });
+            } else { console.warn('[mcp_image] b64/mime manquant', Object.keys(p)); }
+          } catch(e) { console.error('[mcp_image] parse error', e, 'raw.length=', raw.length); }
+          return null;
+        }
+        // Event standard (delta LLM)
+        try {
+          const parsed = JSON.parse(raw); if (parsed.error) throw new Error(JSON.stringify(parsed.error));
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta && !hasMcpImage) setMessages(prev => { const m = [...prev]; const last = m[m.length-1]; m[m.length-1] = { ...last, content: (typeof last.content === 'string' ? last.content : '') + delta, streaming: true }; return m; });
+          if (parsed.usage) capturedUsage = { promptTokens: parsed.usage.prompt_tokens ?? 0, completionTokens: parsed.usage.completion_tokens ?? 0, kgCO2eq: parsed.usage.impacts?.kgCO2eq ?? null };
+        } catch { /* ignore */ }
+        return null;
+      };
       outer: while (true) {
         const { done, value } = await reader.read();
         if (value) tail += decoder.decode(value, { stream: !done });
         if (done) break;
-        const nl = tail.lastIndexOf('\n'); if (nl === -1) continue;
-        const block = tail.slice(0, nl + 1); tail = tail.slice(nl + 1);
-        for (const line of block.split('\n')) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('event:')) { pendingEvent = trimmed.slice(6).trim(); continue; }
-          if (!trimmed.startsWith('data:')) { if (!trimmed) pendingEvent = null; continue; }
-          const raw = trimmed.slice(5).trim(); if (raw === '[DONE]') break outer; if (!raw) continue;
-          if (pendingEvent === 'rag_sources') {
-            pendingEvent = null;
-            try { const p = JSON.parse(raw); if (p.sources) setMessages(prev => { const m = [...prev]; m[m.length-1] = { ...m[m.length-1], ragSources: p.sources }; return m; }); } catch { /* ignore */ }
-            continue;
-          }
-          pendingEvent = null;
-          try {
-            const parsed = JSON.parse(raw); if (parsed.error) throw new Error(JSON.stringify(parsed.error));
-            const delta = parsed.choices?.[0]?.delta?.content;
-            if (delta) setMessages(prev => { const m = [...prev]; const last = m[m.length-1]; m[m.length-1] = { ...last, content: (typeof last.content === 'string' ? last.content : '') + delta, streaming: true }; return m; });
-            if (parsed.usage) capturedUsage = { promptTokens: parsed.usage.prompt_tokens ?? 0, completionTokens: parsed.usage.completion_tokens ?? 0, kgCO2eq: parsed.usage.impacts?.kgCO2eq ?? null };
-          } catch { /* ignore */ }
+        // Traiter tous les blocs SSE complets (séparés par \n\n)
+        let sepIdx: number;
+        while ((sepIdx = tail.indexOf('\n\n')) !== -1) {
+          const block = tail.slice(0, sepIdx);
+          tail = tail.slice(sepIdx + 2);
+          if (dispatchSseBlock(block) === 'DONE') break outer;
         }
       }
       if (capturedUsage) setLastUsage(capturedUsage);
@@ -558,7 +588,7 @@ function AppInner() {
   return (
     <div className="layout">
       {showSettings      && <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettings(false)} />}
-      {showMcpStatus     && <McpStatusPanel servers={settings.mcp_servers || []} onClose={() => setShowMcpStatus(false)} />}
+      {showMcpStatus     && <McpStatusPanel servers={settings.mcp_servers || []} webSearchMcp={settings.web_search_mcp ? { url: settings.web_search_mcp, alias: settings.web_search_mcp_alias } : undefined} webSearchActive={webSearch} onClose={() => setShowMcpStatus(false)} />}
       {showIngestion     && <IngestionModal settings={settings} spaces={spaces} onClose={() => { setShowIngestion(false); reloadAssignments(); }} />}
       {showPromptsEditor && <PromptsEditorModal onClose={() => setShowPromptsEditor(false)} onSpacesUpdated={reloadSpaces} />}
       {showAbout         && <AboutModal onClose={() => setShowAbout(false)} />}
@@ -784,14 +814,26 @@ function AppInner() {
                   <button className={`attach-btn ${extracting ? 'attach-btn--loading' : ''} ${attachments.length ? 'attach-btn--active' : ''}`} onClick={() => fileInputRef.current?.click()} disabled={loading || extracting}>
                     {extracting ? <span className="spinner-sm" /> : <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z" clipRule="evenodd"/></svg>}
                   </button>
-                  <button className={`websearch-pill ${webSearch ? 'websearch-pill--on' : ''}`} onClick={() => setWebSearch(v => !v)} type="button">
-                    <svg viewBox="0 0 16 16" fill="currentColor" width="11" height="11"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM2.05 8.5h2.01c.06.93.22 1.8.46 2.55A5.01 5.01 0 012.05 8.5zm0-1h2.01A9.2 9.2 0 014.52 4.95 5.01 5.01 0 012.05 7.5zm5.45 5.97V11h-1.7c.22.75.52 1.36.85 1.78.27.35.57.55.85.55v.14zm0-3.47H5.07c-.06-.8-.1-1.62-.1-2.5h2.53v2.5zm0-3.5H4.97c0-.88.04-1.7.1-2.5H7.5V6.5zm0-3.47V1.14c-.28 0-.58.2-.85.55-.33.42-.63 1.03-.85 1.78h1.7v.14zM8.5 13.97V11h1.7c-.22.75-.52 1.36-.85 1.78-.27.35-.57.55-.85.55v.14zm0-3.47V8h2.53c0 .88-.04 1.7-.1 2.5H8.5zm0-3.5V4.5h2.43c.06.8.1 1.62.1 2.5H8.5zm0-3.47V1.14c.28 0 .58.2.85.55.33.42.63 1.03.85 1.78H8.5v.14z"/></svg>
-                    Web
-                  </button>
+                  <McpTooltipButton
+                    className={`websearch-pill ${webSearch ? 'websearch-pill--on' : ''}`}
+                    onClick={() => { setWebSearch(v => !v); if (!webSearch) setShowMcpStatus(true); }}
+                    entries={settings.web_search_mcp ? [{ url: settings.web_search_mcp, alias: settings.web_search_mcp_alias || undefined }] : []}
+                    label={<>
+                      <svg viewBox="0 0 16 16" fill="currentColor" width="11" height="11"><path d="M8 1a7 7 0 100 14A7 7 0 008 1zM2.05 8.5h2.01c.06.93.22 1.8.46 2.55A5.01 5.01 0 012.05 8.5zm0-1h2.01A9.2 9.2 0 014.52 4.95 5.01 5.01 0 012.05 7.5zm5.45 5.97V11h-1.7c.22.75.52 1.36.85 1.78.27.35.57.55.85.55v.14zm0-3.47H5.07c-.06-.8-.1-1.62-.1-2.5h2.53v2.5zm0-3.5H4.97c0-.88.04-1.7.1-2.5H7.5V6.5zm0-3.47V1.14c-.28 0-.58.2-.85.55-.33.42-.63 1.03-.85 1.78h1.7v.14zM8.5 13.97V11h1.7c-.22.75-.52 1.36-.85 1.78-.27.35-.57.55-.85.55v.14zm0-3.47V8h2.53c0 .88-.04 1.7-.1 2.5H8.5zm0-3.5V4.5h2.43c.06.8.1 1.62.1 2.5H8.5zm0-3.47V1.14c.28 0 .58.2.85.55.33.42.63 1.03.85 1.78H8.5v.14z"/></svg>
+                      {webSearch && settings.web_search_mcp_alias ? settings.web_search_mcp_alias : 'Web'}
+                    </>}
+                  />
                   {(settings.mcp_servers || []).length > 0 && (
-                    <button className="websearch-pill websearch-pill--on mcp-active-pill" onClick={() => setShowMcpStatus(true)} type="button">
-                      🔌 {settings.mcp_servers!.length} MCP
-                    </button>
+                    <McpTooltipButton
+                      className="websearch-pill websearch-pill--on mcp-active-pill"
+                      onClick={() => setShowMcpStatus(true)}
+                      entries={(settings.mcp_servers || []) as McpEntry[]}
+                      label={<>
+                        🔌 {(settings.mcp_servers || []).length === 1
+                          ? ((settings.mcp_servers![0].alias) || `1 MCP`)
+                          : `${settings.mcp_servers!.length} MCP`}
+                      </>}
+                    />
                   )}
                   <span className="input-hint">Shift+Entrée pour sauter une ligne</span>
                   <button className="send-btn" onClick={() => sendMessage()} disabled={loading || extracting || (!(inputRef.current?.value?.trim()) && !attachments.length)}>

@@ -6,6 +6,28 @@ Le format suit [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/),
 et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 
 ---
+
+## [2.2.0] — 2026-05-29
+
+### Ajouté
+
+- **Alias MCP** — chaque serveur MCP peut désormais recevoir un nom d'affichage personnalisé (alias) dans les paramètres ; l'alias s'affiche à la place de l'URL dans le panel de statut, les boutons du chat et les info-bulles
+- **Info-bulle de statut MCP** — survoler les boutons « Web » et « MCP » dans la zone de saisie affiche une info-bulle indiquant, pour chaque serveur concerné, son alias et son état de connexion en temps réel (point vert / rouge) ; le clic conserve son comportement habituel (panel détaillé avec la liste des outils)
+- **MCP Web Search configurable** — le bouton « Web » utilise désormais un serveur MCP dédié (URL + alias configurables dans les paramètres) au lieu de l'API Tavily ; le serveur n'est activé que lorsque le bouton est allumé
+
+### Amélioré
+
+- **Appels MCP parallèles** — `list_tools` et `collect_all_tools` effectuent leurs requêtes en parallèle (`join_all`) ; le temps de réponse du panel MCP est désormais celui du serveur le plus lent, non la somme de tous les timeouts
+- **Statut MCP fiable** — `list_tools` retourne maintenant un statut explicite (`bool`) distinct du nombre d'outils, ce qui évite de marquer « error » un serveur joignable mais exposant zéro outil
+- **Interface MCP dans les paramètres** — la section Serveurs MCP est redessinée : cartes avec barre d'accentuation colorée, alias éditable inline, URL en monospace discret, bouton de suppression visible uniquement au survol ; le formulaire d'ajout adopte un style « zone pointillée » qui s'anime au focus
+- **Console de développement** — ouverture automatique des DevTools au démarrage en mode debug.
+
+### Supprimé
+
+- **Tavily API** — suppression complète de l'intégration Tavily (`web_search.rs`, `fetch_web_search`, champ `tavily_key`, variable d'environnement `TIMEOUT_WEB_SEARCH_SECS`, fonction `config::timeout_web_search`) ; remplacée par le MCP Web Search
+
+---
+
 ## [2.1.1] — 2026-05-26
 
 ### Amélioré

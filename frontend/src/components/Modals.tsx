@@ -34,8 +34,9 @@ export interface Settings {
   endpoint: string;
   bearer: string;
   model: string;
-  tavily_key?: string;
-  mcp_servers?: string[];
+  web_search_mcp?: string;
+  web_search_mcp_alias?: string;
+  mcp_servers?: { url: string; alias?: string }[];
   font_family?: string;
   font_size?: number;
 }
@@ -79,6 +80,7 @@ interface SettingsModalProps {
 export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps) {
   const [form, setForm]         = useState<Settings>({ ...settings, mcp_servers: settings.mcp_servers || [] });
   const [newMcp, setNewMcp]     = useState('');
+  const [newMcpAlias, setNewMcpAlias] = useState('');
   const [resetting, setResetting] = useState(false);
   const [resetDone, setResetDone] = useState(false);
 
@@ -104,14 +106,24 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
   const addMcp = () => {
     let url = newMcp.trim();
     if (!url) return;
-    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-    if ((form.mcp_servers || []).includes(url)) { setNewMcp(''); return; }
-    setForm(f => ({ ...f, mcp_servers: [...(f.mcp_servers || []), url] }));
+    if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
+    if ((form.mcp_servers || []).some(s => s.url === url)) { setNewMcp(''); setNewMcpAlias(''); return; }
+    const alias = newMcpAlias.trim() || undefined;
+    setForm(f => ({ ...f, mcp_servers: [...(f.mcp_servers || []), { url, alias }] }));
     setNewMcp('');
+    setNewMcpAlias('');
   };
 
   const removeMcp = (i: number) =>
     setForm(f => ({ ...f, mcp_servers: (f.mcp_servers || []).filter((_, j) => j !== i) }));
+
+  const updateMcpAlias = (i: number, alias: string) =>
+    setForm(f => ({
+      ...f,
+      mcp_servers: (f.mcp_servers || []).map((s, j) =>
+        j === i ? { ...s, alias: alias.trim() || undefined } : s
+      )
+    }));
 
   return (
     <div className="modal-overlay">
@@ -137,9 +149,18 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
               <label className="field-label">Modèle</label>
               <input className="field-input" value={form.model} onChange={update('model')} placeholder="openai/gpt-oss-120b" />
             </div>
-            <div className="field-group">
-              <label className="field-label">Clé Tavily <span style={{ fontWeight: 'normal', opacity: .6 }}>(recherche web)</span></label>
-              <input className="field-input" type="password" value={form.tavily_key || ''} onChange={update('tavily_key')} placeholder="tvly-…" />
+            <div className="field-group mcp-web-field-group">
+              <label className="field-label">
+                <span className="mcp-web-badge">Web</span>
+                MCP Web Search
+              </label>
+              <div className="mcp-web-card">
+                <div className="mcp-web-card__icon">🌐</div>
+                <div className="mcp-web-card__fields">
+                  <input className="field-input" value={form.web_search_mcp || ''} onChange={update('web_search_mcp')} placeholder="http://localhost:6503/mcp" />
+                  <input className="field-input mcp-web-alias-input" value={form.web_search_mcp_alias || ''} onChange={update('web_search_mcp_alias')} placeholder="Nom affiché sur le bouton (ex: Recherche web)" />
+                </div>
+              </div>
             </div>
 
             <div className="settings-section-title" style={{ marginTop: 16 }}>Apparence</div>
@@ -217,30 +238,62 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
           {/* Colonne droite — MCP */}
           <div className="settings-col">
             <div className="settings-section-title">Serveurs MCP</div>
-            <div className="field-hint" style={{ marginBottom: 8 }}>
+            <div className="field-hint" style={{ marginBottom: 12 }}>
               <span className="hint-icon">🔌</span>
               <span>Connecteurs MCP qui étendent les capacités du LLM (filesystem, calendrier, SIRH…)</span>
             </div>
-            <div className="settings-mcp-list">
-              {(form.mcp_servers || []).map((url, i) => (
-                <div key={i} className="mcp-server-row">
-                  <span className="mcp-server-url">{url}</span>
-                  <button className="mcp-remove-btn" onClick={() => removeMcp(i)} title="Supprimer">✕</button>
+
+            <div className="mcp-cards-list">
+              {(form.mcp_servers || []).length === 0 && (
+                <div className="mcp-empty-state">
+                  <span className="mcp-empty-icon">🔌</span>
+                  <span>Aucun serveur configuré</span>
+                </div>
+              )}
+              {(form.mcp_servers || []).map((srv, i) => (
+                <div key={i} className="mcp-card">
+                  <div className="mcp-card__accent" />
+                  <div className="mcp-card__body">
+                    <div className="mcp-card__top">
+                      <span className="mcp-card__icon">⚡</span>
+                      <input
+                        className="mcp-card__alias-input"
+                        value={srv.alias || ''}
+                        onChange={e => updateMcpAlias(i, e.target.value)}
+                        placeholder="Nom du serveur…"
+                        spellCheck={false}
+                      />
+                      <button className="mcp-card__remove" onClick={() => removeMcp(i)} title="Supprimer">✕</button>
+                    </div>
+                    <span className="mcp-card__url" title={srv.url}>{srv.url}</span>
+                  </div>
                 </div>
               ))}
-              {(form.mcp_servers || []).length === 0 && (
-                <div className="settings-mcp-empty">Aucun serveur configuré.</div>
-              )}
             </div>
-            <div className="mcp-add-row" style={{ marginTop: 8 }}>
-              <input
-                className="field-input" value={newMcp}
-                onChange={e => setNewMcp(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && addMcp()}
-                placeholder="https://mon-serveur-mcp.example.com"
-              />
-              <button className="btn-ghost" onClick={addMcp} style={{ flexShrink: 0 }}>Ajouter</button>
+
+            <div className="mcp-add-card">
+              <div className="mcp-add-card__icon">＋</div>
+              <div className="mcp-add-card__fields">
+                <input
+                  className="field-input"
+                  value={newMcp}
+                  onChange={e => setNewMcp(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && addMcp()}
+                  placeholder="http://localhost:3001/sse"
+                  spellCheck={false}
+                />
+                <input
+                  className="field-input mcp-add-alias"
+                  value={newMcpAlias}
+                  onChange={e => setNewMcpAlias(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && addMcp()}
+                  placeholder="Nom (optionnel)"
+                  spellCheck={false}
+                />
+              </div>
+              <button className="mcp-add-btn" onClick={addMcp}>Ajouter</button>
             </div>
+
             <div className="field-hint" style={{ marginTop: 12 }}>
               <span className="hint-icon">💡</span>
               <span>Ces paramètres sont sauvegardés localement et ne sont jamais transmis à un tiers.</span>
@@ -260,37 +313,63 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
 // ── McpStatusPanel ────────────────────────────────────────────────────────────
 
 interface McpStatusPanelProps {
-  servers: string[];
+  servers: { url: string; alias?: string }[];
+  webSearchMcp?: { url: string; alias?: string };
+  webSearchActive?: boolean;
   onClose: () => void;
 }
 
-export function McpStatusPanel({ servers, onClose }: McpStatusPanelProps) {
+export function McpStatusPanel({ servers, webSearchMcp, webSearchActive, onClose }: McpStatusPanelProps) {
   const [statuses, setStatuses]   = useState<McpServerStatus[] | null>(null);
   const [loading, setLoading]     = useState(true);
   const [expanded, setExpanded]   = useState<Record<number, boolean>>({});
 
+  // Normalise au cas où des strings legacy passeraient encore
+  const safeServers = servers.map((s: unknown) =>
+    typeof s === 'string' ? { url: s, alias: undefined } : s as { url: string; alias?: string }
+  );
+  const serverUrls    = safeServers.map(s => s.url).join('|');
+  const serverAliases = safeServers.map(s => s.alias || '').join('|');
+  const webMcpUrl     = webSearchMcp?.url ?? '';
+  const webMcpAlias   = webSearchMcp?.alias ?? '';
+
   useEffect(() => {
-    if (!servers || servers.length === 0) { setLoading(false); setStatuses([]); return; }
+    const allServers = [
+      ...safeServers.map(s => s.url),
+      ...(webSearchActive && webSearchMcp ? [webSearchMcp.url] : []),
+    ];
+
+    const aliasMap: Record<string, string> = {};
+    safeServers.forEach(s => { if (s.alias) aliasMap[s.url] = s.alias; });
+    if (webSearchMcp?.alias) aliasMap[webSearchMcp.url] = webSearchMcp.alias;
+
+    if (!allServers.length) { setLoading(false); setStatuses([]); return; }
     setLoading(true);
     fetch(`${API_BASE}/api-proxy/api/mcp/tools`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ servers }),
+      body: JSON.stringify({ servers: allServers }),
     })
       .then(r => r.json())
       .then((data: { servers?: McpServerStatus[] }) => setStatuses(data.servers || []))
-      .catch(() => setStatuses(servers.map(s => ({ server: s, status: 'error' as const, tools: [], tool_count: 0 }))))
+      .catch(() => setStatuses(allServers.map(s => ({ server: s, status: 'error' as const, tools: [], tool_count: 0 }))))
       .finally(() => setLoading(false));
-  }, [servers]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverUrls, serverAliases, webMcpUrl, webMcpAlias, webSearchActive]);
+
+  // Build alias map for render (stable, derived from same primitives)
+  const aliasMap: Record<string, string> = {};
+  safeServers.forEach(s => { if (s.alias) aliasMap[s.url] = s.alias; });
+  if (webSearchMcp?.alias) aliasMap[webSearchMcp.url] = webSearchMcp.alias;
 
   const toggleExpanded = (i: number) =>
     setExpanded(prev => ({ ...prev, [i]: !prev[i] }));
 
-  /** Truncate a URL to a short display name */
-  const shortName = (url: string) => {
+  const displayName = (url: string) => {
+    if (aliasMap[url]) return aliasMap[url];
     try {
       const u = new URL(url);
-      return u.hostname.replace(/^www\./, '');
+      return u.port ? `localhost:${u.port}` : u.hostname.replace(/^www\./, '');
     } catch {
       return url.length > 40 ? url.slice(0, 37) + '…' : url;
     }
@@ -329,7 +408,7 @@ export function McpStatusPanel({ servers, onClose }: McpStatusPanelProps) {
                   style={{ cursor: hasTools ? 'pointer' : 'default' }}
                 >
                   <span className={`mcp-status-dot mcp-status-dot--${srv.status}`} />
-                  <span className="mcp-pill-name" title={srv.server}>{shortName(srv.server)}</span>
+                  <span className="mcp-pill-name" title={srv.server}>{displayName(srv.server)}</span>
                   <span className={`mcp-pill-badge mcp-pill-badge--${srv.status}`}>
                     {srv.status === 'ok'
                       ? `${srv.tool_count} outil${srv.tool_count !== 1 ? 's' : ''}`
@@ -392,6 +471,112 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
           <button className="about-close-btn" onClick={onClose}>Fermer</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── McpTooltipButton ──────────────────────────────────────────────────────────
+// Bouton pill avec info-bulle au survol affichant statut des serveurs MCP.
+// Le clic est délégué au parent (inchangé).
+
+export interface McpEntry { url: string; alias?: string; }
+
+interface McpTooltipButtonProps {
+  entries: McpEntry[];          // serveurs à afficher dans la bulle
+  label: React.ReactNode;       // contenu du bouton
+  className?: string;
+  onClick?: () => void;
+  type?: 'button' | 'submit';
+}
+
+// Cache global : url → { status, ts }
+const _statusCache: Record<string, { ok: boolean; ts: number }> = {};
+const CACHE_TTL = 15_000; // 15 s
+
+async function fetchStatuses(entries: McpEntry[]): Promise<Record<string, boolean>> {
+  const toFetch = entries.filter(e => {
+    const c = _statusCache[e.url];
+    return !c || Date.now() - c.ts > CACHE_TTL;
+  });
+
+  if (toFetch.length > 0) {
+    try {
+      const res = await fetch(`${API_BASE}/api-proxy/api/mcp/tools`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers: toFetch.map(e => e.url) }),
+      });
+      const data: { servers?: Array<{ server: string; status: string }> } = await res.json();
+      (data.servers || []).forEach(s => {
+        _statusCache[s.server] = { ok: s.status === 'ok', ts: Date.now() };
+      });
+    } catch {
+      toFetch.forEach(e => { _statusCache[e.url] = { ok: false, ts: Date.now() }; });
+    }
+  }
+
+  return Object.fromEntries(entries.map(e => [e.url, _statusCache[e.url]?.ok ?? false]));
+}
+
+export function McpTooltipButton({ entries, label, className, onClick, type = 'button' }: McpTooltipButtonProps) {
+  const [visible,  setVisible]  = useState(false);
+  const [statuses, setStatuses] = useState<Record<string, boolean>>({});
+  const [loading,  setLoading]  = useState(false);
+  const timerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleMouseEnter = () => {
+    timerRef.current = setTimeout(async () => {
+      setVisible(true);
+      if (entries.length === 0) return;
+      setLoading(true);
+      const s = await fetchStatuses(entries);
+      setStatuses(s);
+      setLoading(false);
+    }, 300); // délai avant affichage
+  };
+
+  const handleMouseLeave = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    setVisible(false);
+  };
+
+  const displayName = (e: McpEntry) => {
+    if (e.alias) return e.alias;
+    try {
+      const u = new URL(e.url);
+      return u.port ? `localhost:${u.port}` : u.hostname;
+    } catch { return e.url; }
+  };
+
+  return (
+    <div className="mcp-tooltip-wrapper" onMouseEnter={handleMouseEnter} onMouseLeave={handleMouseLeave}>
+      <button className={className} onClick={onClick} type={type}>
+        {label}
+      </button>
+      {visible && (
+        <div className="mcp-tooltip">
+          <div className="mcp-tooltip__arrow" />
+          {entries.length === 0 && (
+            <div className="mcp-tooltip__empty">Aucun serveur configuré</div>
+          )}
+          {loading && entries.length > 0 && (
+            <div className="mcp-tooltip__loading">
+              {entries.map(e => (
+                <div key={e.url} className="mcp-tooltip__row">
+                  <span className="mcp-tooltip__dot mcp-tooltip__dot--loading" />
+                  <span className="mcp-tooltip__name">{displayName(e)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!loading && entries.map(e => (
+            <div key={e.url} className="mcp-tooltip__row">
+              <span className={`mcp-tooltip__dot mcp-tooltip__dot--${statuses[e.url] ? 'ok' : 'err'}`} />
+              <span className="mcp-tooltip__name">{displayName(e)}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

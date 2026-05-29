@@ -193,7 +193,7 @@ async fn rpc_post(
 ///
 /// Le serveur est en mode stateless → pas besoin d'initialize préalable.
 /// Un seul POST suffit.
-pub async fn list_tools(client: &Client, server_url: &str) -> Vec<Value> {
+pub async fn list_tools(client: &Client, server_url: &str) -> (Vec<Value>, bool) {
     let body = json!({
         "jsonrpc": "2.0",
         "id": 1,
@@ -205,18 +205,18 @@ pub async fn list_tools(client: &Client, server_url: &str) -> Vec<Value> {
         Some(data) => {
             if let Some(tools) = data["result"]["tools"].as_array() {
                 info!("MCP: {} tools depuis {}", tools.len(), server_url);
-                return tools.clone();
+                return (tools.clone(), true);
             }
             if let Some(err) = data.get("error") {
                 warn!("MCP tools/list error depuis {}: {}", server_url, err);
             } else {
                 warn!("MCP: réponse inattendue de {}: {:?}", server_url, data);
             }
-            vec![]
+            (vec![], false)
         }
         None => {
             warn!("MCP: serveur injoignable — {}", server_url);
-            vec![]
+            (vec![], false)
         }
     }
 }
@@ -233,13 +233,21 @@ pub fn mcp_tool_to_openai(tool: &Value, server_url: &str) -> Value {
     })
 }
 
-/// Exécute un tool MCP et retourne le résultat sous forme de string.
+/// Résultat d'un appel tool MCP.
+/// Retourne le texte, et optionnellement une image (b64 + mime).
+pub struct McpToolResult {
+    pub text: String,
+    pub image_b64: Option<String>,
+    pub image_mime: Option<String>,
+}
+
+/// Exécute un tool MCP et retourne le résultat structuré.
 pub async fn call_tool(
     client: &Client,
     server_url: &str,
     tool_name: &str,
     arguments: &Value,
-) -> String {
+) -> McpToolResult {
     let body = json!({
         "jsonrpc": "2.0",
         "id": 2,
@@ -251,7 +259,7 @@ pub async fn call_tool(
         Some(data) => {
             if let Some(err) = data.get("error") {
                 warn!("MCP tools/call error: {}", err);
-                return format!("Erreur MCP : {}", err);
+                return McpToolResult { text: format!("Erreur MCP : {}", err), image_b64: None, image_mime: None };
             }
             extract_content(&data["result"])
         }
@@ -260,41 +268,57 @@ pub async fn call_tool(
                 "MCP: échec d'appel du tool {} sur {}",
                 tool_name, server_url
             );
-            format!(
-                "Erreur : impossible d'appeler le tool {} sur {}",
-                tool_name, server_url
-            )
+McpToolResult { text: format!("Erreur : impossible d'appeler le tool {} sur {}", tool_name, server_url), image_b64: None, image_mime: None }
         }
     }
 }
 
 /// Collecte tous les tools de tous les serveurs MCP configurés.
 pub async fn collect_all_tools(client: &Client, servers: &[String]) -> Vec<(String, Value)> {
-    let mut result = Vec::new();
-    for server in servers {
-        let tools = list_tools(client, server).await;
-        info!("MCP: {} tools depuis {}", tools.len(), server);
-        for tool in tools {
-            result.push((server.clone(), tool));
+    let futures: Vec<_> = servers.iter().map(|server| {
+        let client = client.clone();
+        let server = server.clone();
+        async move {
+            let (tools, _ok) = list_tools(&client, &server).await;
+            info!("MCP: {} tools depuis {}", tools.len(), server);
+            tools.into_iter().map(move |t| (server.clone(), t)).collect::<Vec<_>>()
         }
-    }
-    result
+    }).collect();
+    futures::future::join_all(futures).await.into_iter().flatten().collect()
 }
 
-/// Extrait le contenu textuel d'une réponse MCP.
-fn extract_content(data: &Value) -> String {
-    // Format MCP standard : { content: [{type:"text", text:"..."}] }
+/// Extrait le contenu d'une réponse MCP (texte + image optionnelle).
+fn extract_content(data: &Value) -> McpToolResult {
     if let Some(content) = data["content"].as_array() {
-        return content
-            .iter()
-            .filter_map(|c| c["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
+        let mut texts: Vec<&str> = Vec::new();
+        let mut image_b64: Option<String> = None;
+        let mut image_mime: Option<String> = None;
+
+        for block in content {
+            match block["type"].as_str() {
+                Some("text") => {
+                    if let Some(t) = block["text"].as_str() {
+                        texts.push(t);
+                    }
+                }
+                Some("image") => {
+                    image_b64  = block["data"].as_str().map(|s| s.to_string());
+                    image_mime = block["mimeType"].as_str().map(|s| s.to_string());
+                }
+                _ => {}
+            }
+        }
+
+        return McpToolResult {
+            text:       texts.join("\n"),
+            image_b64,
+            image_mime,
+        };
     }
     if let Some(s) = data.as_str() {
-        return s.to_string();
+        return McpToolResult { text: s.to_string(), image_b64: None, image_mime: None };
     }
-    data.to_string()
+    McpToolResult { text: data.to_string(), image_b64: None, image_mime: None }
 }
 
 /// Transforme une URL en slug pour les noms de tools.

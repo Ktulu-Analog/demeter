@@ -24,7 +24,6 @@ mod mcp;
 mod models;
 mod rag;
 mod spaces;
-mod web_search;
 
 pub use api::{AppState, Credentials};
 pub use db::Database;
@@ -37,8 +36,6 @@ pub use db::Database;
 struct CredentialsPayload {
     endpoint: String,
     bearer: String,
-    #[serde(default)]
-    tavily_key: String,
 }
 
 #[tauri::command]
@@ -49,7 +46,6 @@ async fn init_credentials(
     let mut creds = state.credentials.write().await;
     creds.endpoint = payload.endpoint;
     creds.bearer = payload.bearer;
-    creds.tavily_key = payload.tavily_key;
     Ok(())
 }
 
@@ -70,6 +66,12 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
+            // ── DevTools en mode debug ────────────────────────────────────────
+            #[cfg(debug_assertions)]
+            if let Some(w) = app.get_webview_window("main") {
+                w.open_devtools();
+            }
+
             // ── Menu natif ────────────────────────────────────────────────────
             let handle = app.handle();
 

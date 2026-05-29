@@ -189,6 +189,14 @@ export function MdImage({ src: rawSrc, alt }: MdImageProps) {
     if (!rawSrc) return;
     setErrored(false);
     setLoading(true);
+
+    // Les data-URLs (base64 inline) sont auto-contenues — pas de proxy
+    if (rawSrc.startsWith('data:')) {
+      setResolvedSrc(rawSrc);
+      setLoading(false);
+      return;
+    }
+
     resolveImageUrl(rawSrc).then(url => {
       const proxied = url ? `${API_BASE}/api-proxy/api/image-proxy?url=${encodeURIComponent(url)}` : null;
       setResolvedSrc(proxied);
@@ -343,6 +351,35 @@ interface CodeBlockProps {
   streaming?: boolean;
 }
 
+// ── ScreenshotBlock — affiche un screenshot base64 passé dans un bloc de code ─
+interface ScreenshotBlockProps { raw: string; }
+
+function ScreenshotBlock({ raw }: ScreenshotBlockProps) {
+  // Format attendu (première ligne = métadonnées JSON optionnelles, reste = base64)
+  let mime = 'image/jpeg';
+  let alt  = 'Screenshot';
+  let b64  = raw.trim();
+
+  const newline = raw.indexOf('\n');
+  if (newline !== -1) {
+    const firstLine = raw.slice(0, newline).trim();
+    try {
+      const meta = JSON.parse(firstLine) as { mime?: string; alt?: string };
+      if (meta.mime) mime = meta.mime;
+      if (meta.alt)  alt  = meta.alt;
+      b64 = raw.slice(newline + 1).trim();
+    } catch { /* première ligne pas du JSON → tout est base64 */ }
+  }
+
+  const src = `data:${mime};base64,${b64}`;
+  return (
+    <span className="md-img-wrap">
+      <img className="md-img" src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 6 }} />
+      <span className="md-img-caption">{alt}</span>
+    </span>
+  );
+}
+
 export function CodeBlock({ className, children, node, streaming }: CodeBlockProps) {
   const lang = (className || '').replace('language-', '');
   // Extract raw text from hast node or fallback to children string
@@ -351,9 +388,10 @@ export function CodeBlock({ className, children, node, streaming }: CodeBlockPro
     .map(c => c.value)
     .join('') ?? String(children ?? '');
   const code = raw.replace(/\n$/, '');
-  if (lang === 'echarts') return <EChartsBlock code={code} streaming={streaming} />;
-  if (lang === 'mermaid') return <MermaidBlock code={code} streaming={streaming} />;
-  if (lang === 'word')    return <WordChatCard raw={raw} />;
+  if (lang === 'echarts')     return <EChartsBlock code={code} streaming={streaming} />;
+  if (lang === 'mermaid')     return <MermaidBlock code={code} streaming={streaming} />;
+  if (lang === 'word')        return <WordChatCard raw={raw} />;
+  if (lang === 'screenshot')  return <ScreenshotBlock raw={code} />;
   return <pre className="code-block"><code className={className}>{children}</code></pre>;
 }
 

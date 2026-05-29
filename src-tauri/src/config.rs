@@ -150,7 +150,3 @@ pub fn timeout_models() -> Duration {
     Duration::from_secs(env_u64("TIMEOUT_MODELS_SECS", 8))
 }
 
-/// Timeout pour la recherche web (défaut : 20s).
-pub fn timeout_web_search() -> Duration {
-    Duration::from_secs(env_u64("TIMEOUT_WEB_SEARCH_SECS", 20))
-}

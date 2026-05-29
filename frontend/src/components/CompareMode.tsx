@@ -78,8 +78,7 @@ async function streamIntoSlot(
     model: slot.model,
     stream: true,
     space_id: spaceId,
-    web_search: webSearch,
-    mcp_servers: settings.mcp_servers || [],   // Fix #4 : était [] en dur
+    mcp_servers: [...(settings.mcp_servers || []).map(s => s.url), ...(webSearch && settings.web_search_mcp ? [settings.web_search_mcp] : [])],
   };
   if (collectionId != null) body.collection_id = collectionId;
 
@@ -710,9 +709,11 @@ export function CompareModeView({
                 className="websearch-pill websearch-pill--on mcp-active-pill"
                 onClick={onMcpClick}
                 type="button"
-                title={`${settings.mcp_servers!.length} serveur(s) MCP actif(s)`}
+                title={(settings.mcp_servers || []).map(s => s.alias || s.url).join(', ')}
               >
-                🔌 {settings.mcp_servers!.length} MCP
+                🔌 {(settings.mcp_servers || []).length === 1
+                  ? (settings.mcp_servers![0].alias || '1 MCP')
+                  : `${settings.mcp_servers!.length} MCP`}
               </button>
             )}
 

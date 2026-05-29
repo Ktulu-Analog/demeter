@@ -39,8 +39,6 @@ pub struct ChatRequest {
     pub space_id: Option<String>,
     pub collection_id: Option<i64>,
     #[serde(default)]
-    pub web_search: bool,
-    #[serde(default)]
     pub mcp_servers: Vec<String>,
 }
 

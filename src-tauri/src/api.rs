@@ -52,7 +52,6 @@ use crate::{
         retrieve_context_with_chunks, search_chunks,
     },
     spaces::{load_spaces, save_spaces},
-    web_search::fetch_web_search,
 };
 
 // ── System prompt constants ───────────────────────────────────────────────────
@@ -167,6 +166,18 @@ REGLES ABSOLUES :
 ──────────────────────────────────────────
 "#;
 
+const MCP_IMAGE_INSTRUCTION: &str = r#"
+
+──────────────────────────────────────────
+OUTILS MCP — IMAGES
+Quand un outil MCP retourne une image (screenshot, capture, etc.), l'image est DEJA affichee directement dans le chat par le systeme.
+- NE PAS mentionner "chargement", "affichage", "ci-dessus", "ci-dessous" ni aucune reference a l'image
+- NE PAS ecrire de syntaxe markdown image ![...](...)
+- Commenter UNIQUEMENT le contenu visible : ce que montre la page, les informations pertinentes
+- Etre direct et factuel sur ce que l'image contient
+──────────────────────────────────────────
+"#;
+
 const IMAGE_INSTRUCTION: &str = r#"
 
 ──────────────────────────────────────────
@@ -205,7 +216,6 @@ fn append_instructions(system: &str) -> String {
 pub struct Credentials {
     pub endpoint: String,
     pub bearer: String,
-    pub tavily_key: String,
 }
 
 #[derive(Clone)]
@@ -526,16 +536,6 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
 
     let mut final_system = build_system_with_rag(&system_prompt, rag_context.as_deref());
 
-    // Web search
-    if req.web_search {
-        if let Some(ref query) = last_user {
-            info!("Web search triggered for: {:?}", query);
-            let web_ctx = fetch_web_search(query, 6, &creds.tavily_key).await;
-            final_system.push_str("\n\n");
-            final_system.push_str(&web_ctx);
-        }
-    }
-
     // Build LLM endpoint
     let mut endpoint = creds.endpoint.trim_end_matches('/').to_string();
     if !endpoint.ends_with("/chat/completions") {
@@ -570,6 +570,11 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
         vec![]
     };
 
+    // Ajouter l'instruction MCP image si des serveurs MCP sont configurés
+    if !req.mcp_servers.is_empty() {
+        final_system.push_str(MCP_IMAGE_INSTRUCTION);
+    }
+
     // Si on a des tools MCP, on fait d'abord un appel non-streamé pour gérer les tool_calls
     if !mcp_tools.is_empty() {
         let mut loop_messages = messages_payload.clone();
@@ -581,6 +586,7 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
             .build()
             .unwrap_or_default();
 
+        let mut pending_sse_events: Vec<bytes::Bytes> = Vec::new();
         for turn in 0..max_turns {
             let loop_payload = json!({
                 "model":      req.model,
@@ -656,6 +662,11 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
                     sse_chunks.push(Bytes::from(ev));
                 }
 
+                // Émettre d'abord les images MCP interceptées pendant les tours précédents
+                for ev in pending_sse_events.drain(..) {
+                    sse_chunks.push(ev);
+                }
+
                 // Découper le contenu en petits morceaux de ~20 chars pour un rendu fluide
                 for chunk in content.chars().collect::<Vec<_>>().chunks(20) {
                     let piece: String = chunk.iter().collect();
@@ -720,13 +731,28 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
                         .unwrap_or_else(|| req.mcp_servers[0].clone());
 
                     info!("MCP: appel tool {} sur {}", real_tool_name, server);
-                    let result =
+                    let mcp_result =
                         crate::mcp::call_tool(&client, &server, real_tool_name, &fn_args).await;
+
+                    // Si le tool a retourné une image, l'émettre immédiatement via SSE
+                    // avant de repasser au LLM (qui ne reçoit que le texte).
+                    if let (Some(b64), Some(mime)) = (&mcp_result.image_b64, &mcp_result.image_mime) {
+                        let img_event = format!(
+                            "event: mcp_image\ndata: {}\n\n",
+                            serde_json::to_string(&serde_json::json!({
+                                "b64":  b64,
+                                "mime": mime,
+                                "alt":  &mcp_result.text,
+                            })).unwrap_or_default()
+                        );
+                        pending_sse_events.push(bytes::Bytes::from(img_event));
+                    }
 
                     loop_messages.push(json!({
                         "role": "tool",
                         "tool_call_id": tc_id,
-                        "content": result,
+                        // On ne passe au LLM que le texte (pas le base64)
+                        "content": &mcp_result.text,
                     }));
                 }
             }
@@ -854,16 +880,23 @@ async fn mcp_list_tools(Json(req): Json<McpListRequest>) -> Response {
         .build()
         .unwrap_or_default();
 
-    let mut result: Vec<Value> = Vec::new();
-    for server in &req.servers {
-        let tools = crate::mcp::list_tools(&client, server).await;
-        result.push(json!({
-            "server": server,
-            "status": if tools.is_empty() { "error" } else { "ok" },
-            "tools": tools,
-            "tool_count": tools.len(),
-        }));
-    }
+    // Appels parallèles — plus d'attente séquentielle
+    let futures: Vec<_> = req.servers.iter().map(|server| {
+        let client = client.clone();
+        let server = server.clone();
+        async move {
+            let (tools, ok) = crate::mcp::list_tools(&client, &server).await;
+            let count = tools.len();
+            json!({
+                "server": server,
+                "status": if ok { "ok" } else { "error" },
+                "tools": tools,
+                "tool_count": count,
+            })
+        }
+    }).collect();
+
+    let result = futures::future::join_all(futures).await;
     Json(json!({ "servers": result })).into_response()
 }
 
