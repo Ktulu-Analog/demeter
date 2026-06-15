@@ -1,0 +1,513 @@
+/* ============================================================
+   Demeter — Mode Comparaison
+   Styles spécifiques au mode comparaison de modèles
+   ============================================================ */
+
+/* ── Accents spécifiques au mode comparaison ── */
+:root {
+  --compare-accent-a: #2E75B6;
+  --compare-accent-b: #0F6E56;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --compare-accent-a: #5ba3e0;
+    --compare-accent-b: #2db88e;
+  }
+}
+
+/* ── Overlay plein écran ── */
+.cmp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.cmp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.cmp-header-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cmp-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.cmp-title {
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.cmp-subtitle {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
+.cmp-close-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-medium);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.cmp-close-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* ── Barre de sélection de modèles ── */
+.cmp-model-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
+  padding: 10px 20px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.cmp-model-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+}
+
+/* Ligne badge + select */
+.cmp-model-slot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cmp-model-slot--b .cmp-model-slot-row { justify-content: flex-end; }
+.cmp-model-slot--b .cmp-ctx-gauge { flex-direction: row-reverse; }
+
+.cmp-model-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.cmp-model-select {
+  border: 1px solid var(--border-medium);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 4px 8px;
+  cursor: pointer;
+  outline: none;
+  max-width: 260px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp-model-select:focus { border-color: var(--blue-mid); }
+.cmp-model-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.cmp-model-select--bar {
+  font-size: 13px;
+  padding: 5px 10px;
+  max-width: 340px;
+}
+
+.cmp-model-vs {
+  padding: 0 20px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* ── Jauge de contexte ── */
+.cmp-ctx-gauge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 2px;
+}
+.cmp-ctx-bar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-light);
+  overflow: hidden;
+  min-width: 60px;
+  max-width: 260px;
+}
+.cmp-ctx-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.4s ease, background 0.3s;
+}
+.cmp-ctx-label {
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  min-width: 28px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+
+/* ── Corps de la conversation ── */
+.cmp-body {
+  flex: 1;
+  min-height: 0;          /* indispensable pour que flex:1 respecte la hauteur du parent */
+  overflow-y: auto;       /* scroll vertical sur la liste des turns */
+  overflow-x: hidden;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+/* ── État vide ── */
+.cmp-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  text-align: center;
+  padding: 60px 20px;
+  color: var(--text-tertiary);
+}
+.cmp-empty-icon { font-size: 40px; opacity: 0.4; }
+.cmp-empty-title {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.cmp-empty-sub { font-size: 13px; max-width: 420px; line-height: 1.6; }
+.cmp-empty-space {
+  margin-top: 6px;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+}
+
+/* ── Turn (un échange utilisateur + deux réponses) ── */
+.cmp-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Étiquette discrète pour les tours intermédiaires */
+.cmp-turn-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  text-align: center;
+  letter-spacing: 0.04em;
+  padding: 4px 0 0;
+  opacity: 0.7;
+}
+
+.cmp-user-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* ── Rangée de panneaux ── */
+.cmp-panels-row {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  grid-template-rows: 1fr;
+  /* Pas de flex:1 ici : c'est .cmp-body qui scrolle entre les turns.
+     max-height borne la hauteur de chaque paire de panneaux sans déborder
+     de l'overlay. Les panneaux scrollent en interne via .cmp-panel-body. */
+  max-height: calc(100vh - 200px);
+  min-height: 0;
+  gap: 0;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.cmp-divider {
+  background: var(--border-light);
+  width: 1px;
+}
+
+/* ── Panneau individuel ── */
+.cmp-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;          /* indispensable : sans ça le panel ignore la contrainte de la grid row */
+  overflow: hidden;
+  transition: background 0.15s;
+}
+
+.cmp-panel--winner {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--cmp-accent) 4%, transparent) 0%,
+    transparent 60px
+  );
+}
+
+.cmp-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-light);
+  flex-wrap: wrap;
+  min-height: 44px;
+}
+
+.cmp-panel-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+
+.cmp-panel-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cmp-panel-model-name {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ── Métriques ── */
+.cmp-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cmp-metric {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+}
+
+/* ── Badge gagnant ── */
+.cmp-winner-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #faeeda;
+  color: #633806;
+  white-space: nowrap;
+  border: 1px solid #f0d08a;
+  flex-shrink: 0;
+}
+@media (prefers-color-scheme: dark) {
+  .cmp-winner-badge {
+    background: #3a2408;
+    color: #fac775;
+    border-color: #6a4012;
+  }
+}
+
+/* ── Corps du panneau ── */
+.cmp-panel-body {
+  padding: 14px 16px;
+  flex: 1;
+  min-height: 0;          /* indispensable pour que flex:1 se contraigne à la hauteur du panel */
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* ── Erreurs et placeholders ── */
+.cmp-error {
+  color: var(--red-dark);
+  font-size: 13px;
+  padding: 8px 0;
+}
+
+.cmp-placeholder {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-style: italic;
+}
+
+/* Markdown dans le mode comparaison — taille légèrement réduite */
+.cmp-markdown {
+  font-size: calc(var(--font-size-base) + 0.5px);
+  overflow-x: auto;       /* ← défilement horizontal interne si contenu vraiment large */
+  word-break: break-word;
+}
+
+/* ── Pied de panneau : bouton de sélection ── */
+.cmp-panel-footer {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-light);
+  display: flex;
+  justify-content: flex-end;
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+}
+
+.cmp-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--cmp-accent);
+  background: transparent;
+  color: var(--cmp-accent);
+  font-size: 12px;
+  font-weight: 600;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, box-shadow 0.14s;
+  white-space: nowrap;
+}
+.cmp-select-btn:hover {
+  background: var(--cmp-accent);
+  color: #fff;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--cmp-accent) 30%, transparent);
+}
+.cmp-select-btn:active {
+  opacity: 0.85;
+}
+
+/* ── Zone de saisie ── */
+.cmp-input-zone {
+  padding: 0 24px 20px;
+  border-top: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;   /* centrage horizontal identique au chat normal */
+}
+
+.cmp-input-box {
+  width: 100%;
+  max-width: 720px;           /* même contrainte que .input-box */
+  border: 1px solid var(--border-medium);
+  border-radius: 18px;        /* identique au chat normal */
+  background: var(--bg-primary);
+  box-shadow: var(--shadow-sm);
+  padding: 12px 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  position: relative;         /* pour l'overlay drag-over */
+}
+.cmp-input-box:focus-within {
+  border-color: var(--green-mid);   /* vert comme le chat normal */
+  box-shadow: 0 0 0 3px var(--green-glow);
+}
+.cmp-input-box--loading { opacity: 0.75; }
+
+/* État drag-over */
+.cmp-input-box--dragover {
+  border-color: var(--green-mid);
+  box-shadow: 0 0 0 3px var(--green-glow);
+}
+.cmp-input-drop-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  background: var(--bg-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cmp-textarea {
+  border: none;
+  outline: none;
+  background: transparent;
+  resize: none;
+  font-family: var(--font-body);
+  font-size: var(--font-size-base);
+  color: var(--text-primary);
+  line-height: 1.55;
+  width: 100%;
+  min-height: 44px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.cmp-textarea::placeholder { color: var(--text-tertiary); }
+.cmp-textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.cmp-input-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* Bouton d'envoi — réutilise .send-btn de l'app principale */

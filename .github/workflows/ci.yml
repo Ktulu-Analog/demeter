@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ── Frontend ─────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend (TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Type check
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  # ── Backend Rust ─────────────────────────────────────────────────────────────
+  rust:
+    name: Rust (check + clippy + fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install system dependencies (Linux)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          # La clé inclut les features pour éviter de réutiliser des artefacts
+          # compilés avec custom-protocol (qui déclenche le check frontendDist)
+          key: ${{ runner.os }}-cargo-no-default-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-no-default-
+
+      - name: Check formatting
+        working-directory: src-tauri
+        run: cargo fmt --check
+
+      # Sans custom-protocol, tauri-codegen passe en mode dev (dev=true) et
+      # court-circuite le check de frontendDist dès que devUrl est défini.
+      # Aucun stub frontend/build nécessaire.
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --no-default-features -- -D warnings
+
+      - name: Check
+        working-directory: src-tauri
+        run: cargo check --no-default-features
+
+      - name: Tests
+        working-directory: src-tauri
+        run: cargo test --no-default-features
