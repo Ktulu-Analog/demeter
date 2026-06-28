@@ -1036,7 +1036,7 @@ pub fn chunks_to_context(chunks: &[Chunk]) -> String {
                     .text
                     .lines()
                     .find(|l| l.trim_start().starts_with("TITRE"))
-                    .and_then(|l| l.splitn(2, ':').nth(1))
+                    .and_then(|l| l.split_once(':').map(|x| x.1))
                     .unwrap_or(&c.text)
                     .trim()
                     .chars()
