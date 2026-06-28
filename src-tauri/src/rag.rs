@@ -674,10 +674,17 @@ async fn qdrant_vector_search(
             "must": [{"key": "content_type", "match": {"value": ct}}]
         });
     }
-    let req = qdrant_auth(client.post(url).json(&body), admin_key, accessible_collections);
+    let req = qdrant_auth(
+        client.post(url).json(&body),
+        admin_key,
+        accessible_collections,
+    );
     let resp = match req.send().await {
         Ok(r) => r,
-        Err(e) => { warn!("[qdrant_vector_search] réseau: {}", e); return None; }
+        Err(e) => {
+            warn!("[qdrant_vector_search] réseau: {}", e);
+            return None;
+        }
     };
     if !resp.status().is_success() {
         warn!("[qdrant_vector_search] HTTP {}", resp.status());
@@ -693,18 +700,39 @@ fn parse_qdrant_results(data: &Value) -> Vec<Chunk> {
         for r in results {
             let payload = &r["payload"];
             let text = payload["text"].as_str().unwrap_or("").trim().to_string();
-            if text.is_empty() { continue; }
-            let source   = payload["source"].as_str().unwrap_or("").to_string();
-            let page     = payload["page"].as_str().unwrap_or("").to_string();
-            let doc_id   = payload["doc_id"].as_str().unwrap_or("0").parse().unwrap_or(0);
-            let score    = r["score"].as_f64().unwrap_or(0.0);
+            if text.is_empty() {
+                continue;
+            }
+            let source = payload["source"].as_str().unwrap_or("").to_string();
+            let page = payload["page"].as_str().unwrap_or("").to_string();
+            let doc_id = payload["doc_id"]
+                .as_str()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
+            let score = r["score"].as_f64().unwrap_or(0.0);
             let image_url = payload["image_storage_url"]
-                .as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
             let content_type = payload["content_type"]
-                .as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
-            info!("[search_chunks] chunk content_type={:?} image_url={:?}", content_type, image_url);
-            chunks.push(Chunk { text, source, page, document_id: doc_id, score,
-                rerank_score: None, image_url, content_type });
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            info!(
+                "[search_chunks] chunk content_type={:?} image_url={:?}",
+                content_type, image_url
+            );
+            chunks.push(Chunk {
+                text,
+                source,
+                page,
+                document_id: doc_id,
+                score,
+                rerank_score: None,
+                image_url,
+                content_type,
+            });
         }
     }
     chunks
@@ -744,16 +772,25 @@ pub async fn search_chunks(
 
     // ── Recherche 1 : chunks texte (top-K global) ────────────────────────────
     let data_text = match qdrant_vector_search(
-        &client, &url, &vector,
-        config::rag_top_k(), None,
-        admin_key, accessible_collections,
-    ).await {
+        &client,
+        &url,
+        &vector,
+        config::rag_top_k(),
+        None,
+        admin_key,
+        accessible_collections,
+    )
+    .await
+    {
         Some(d) => d,
         None => return vec![],
     };
 
     let nb_results = data_text["result"].as_array().map(|a| a.len()).unwrap_or(0);
-    tracing::info!("[TRACE search_chunks] Qdrant résultats bruts: {}", nb_results);
+    tracing::info!(
+        "[TRACE search_chunks] Qdrant résultats bruts: {}",
+        nb_results
+    );
     let mut chunks = parse_qdrant_results(&data_text);
 
     // ── Recherche 2 : chunks chart_image dédiée ──────────────────────────────
@@ -761,10 +798,16 @@ pub async fn search_chunks(
     let image_top_k = config::rag_image_top_k();
     if image_top_k > 0 {
         if let Some(data_img) = qdrant_vector_search(
-            &client, &url, &vector,
-            image_top_k, Some("chart_image"),
-            admin_key, accessible_collections,
-        ).await {
+            &client,
+            &url,
+            &vector,
+            image_top_k,
+            Some("chart_image"),
+            admin_key,
+            accessible_collections,
+        )
+        .await
+        {
             let img_chunks = parse_qdrant_results(&data_img);
             let nb_img = img_chunks.len();
             // Dédoublonner : ne garder que les images pas déjà dans chunks texte
@@ -776,7 +819,8 @@ pub async fn search_chunks(
                 .collect();
             info!(
                 "[search_chunks] image search dédiée: {} résultats, {} nouveaux",
-                nb_img, new_images.len()
+                nb_img,
+                new_images.len()
             );
             chunks.extend(new_images);
         }
@@ -818,7 +862,10 @@ pub async fn rerank_chunks(
 
     if chunks.is_empty() {
         let kept: Vec<Chunk> = image_chunks.into_iter().take(3).collect();
-        info!("Rerank: 0 text chunks, {} image chunks conservés", kept.len());
+        info!(
+            "Rerank: 0 text chunks, {} image chunks conservés",
+            kept.len()
+        );
         return kept;
     }
 
@@ -837,7 +884,11 @@ pub async fn rerank_chunks(
             let mut result: Vec<Chunk> = $text_chunks[..top.min($text_chunks.len())].to_vec();
             let img_count = $image_chunks.len().min(3);
             result.extend($image_chunks.into_iter().take(3));
-            info!("Rerank fallback: {} text + {} image(s)", result.len() - img_count, img_count);
+            info!(
+                "Rerank fallback: {} text + {} image(s)",
+                result.len() - img_count,
+                img_count
+            );
             return result;
         }};
     }
@@ -981,7 +1032,8 @@ pub fn chunks_to_context(chunks: &[Chunk]) -> String {
             let image_part = if let Some(ref url) = c.image_url {
                 // Extraire le champ TITRE de la description VLM comme texte alternatif.
                 // Un alt contenant des newlines ou crochets casse le rendu Markdown inline.
-                let alt: String = c.text
+                let alt: String = c
+                    .text
                     .lines()
                     .find(|l| l.trim_start().starts_with("TITRE"))
                     .and_then(|l| l.splitn(2, ':').nth(1))
@@ -1007,11 +1059,19 @@ pub fn build_system_with_rag(base_system: &str, context: Option<&str>) -> String
         Some(ctx) => {
             // Log des URLs d'images présentes dans le contexte pour debug
             let image_count = ctx.matches("![").count();
-            tracing::info!("[build_system_with_rag] contexte: {} images détectées", image_count);
+            tracing::info!(
+                "[build_system_with_rag] contexte: {} images détectées",
+                image_count
+            );
             let mut idx_img = 0usize;
             for (i, line) in ctx.lines().enumerate() {
                 if line.contains("![") {
-                    tracing::info!("[build_system_with_rag] image[{}] ligne {}: {}", idx_img, i, &line[..line.len().min(120)]);
+                    tracing::info!(
+                        "[build_system_with_rag] image[{}] ligne {}: {}",
+                        idx_img,
+                        i,
+                        &line[..line.len().min(120)]
+                    );
                     idx_img += 1;
                 }
             }

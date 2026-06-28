@@ -1471,10 +1471,7 @@ struct EndpointParams {
 /// Le frontend envoie `X-Albert-Token: <bearer>` pour éviter la race condition
 /// entre l'IPC Tauri (init_credentials) et les requêtes HTTP de démarrage.
 /// Si le header est absent ou vide, on retombe sur le token stocké dans AppState.
-fn bearer_from_header_or_state(
-    headers: &axum::http::HeaderMap,
-    state_bearer: &str,
-) -> String {
+fn bearer_from_header_or_state(headers: &axum::http::HeaderMap, state_bearer: &str) -> String {
     headers
         .get("x-albert-token")
         .and_then(|v| v.to_str().ok())
