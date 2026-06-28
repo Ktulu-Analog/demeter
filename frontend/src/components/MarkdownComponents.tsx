@@ -217,8 +217,14 @@ export function MdImage({ src: rawSrc, alt }: MdImageProps) {
     }
 
     resolveImageUrl(rawSrc).then(url => {
-      const proxied = url ? `${API_BASE}/api-proxy/api/image-proxy?url=${encodeURIComponent(url)}` : null;
-      setResolvedSrc(proxied);
+      if (!url) { setResolvedSrc(null); setLoading(false); return; }
+      // Les URLs localhost (Garage, services locaux) sont accessibles directement
+      // depuis le navigateur — pas besoin de proxy.
+      const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/]*\.localhost)(:\d+)?/.test(url);
+      const resolved = isLocal
+        ? url
+        : `${API_BASE}/api-proxy/api/image-proxy?url=${encodeURIComponent(url)}`;
+      setResolvedSrc(resolved);
       setLoading(false);
     });
   }, [rawSrc]);

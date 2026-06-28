@@ -34,6 +34,7 @@ export interface Settings {
   endpoint: string;
   bearer: string;
   model: string;
+  extra_models?: string[]; // liste de modèles saisis manuellement (fallback si /v1/models inaccessible)
   qdrant_url?: string;
   qdrant_api_key?: string;
   web_search_mcp?: string;
@@ -148,8 +149,22 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
               <input className="field-input" type="password" value={form.bearer} onChange={update('bearer')} placeholder="sk-…" />
             </div>
             <div className="field-group">
-              <label className="field-label">Modèle</label>
+              <label className="field-label">Modèle par défaut</label>
               <input className="field-input" value={form.model} onChange={update('model')} placeholder="openai/gpt-oss-120b" />
+            </div>
+            <div className="field-group">
+              <label className="field-label">
+                Modèles disponibles
+                <span className="field-label-hint">un par ligne — utilisés si la liste API est inaccessible</span>
+              </label>
+              <textarea
+                className="field-input field-textarea"
+                rows={5}
+                value={(form.extra_models || []).join('\n')}
+                onChange={e => setForm(f => ({ ...f, extra_models: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) }))}
+                placeholder={"openai/gpt-oss-120b\nmistral-medium-2508\nmistralai/Mistral-Small-3.2-24B-Instruct-2506"}
+                spellCheck={false}
+              />
             </div>
             <div className="field-group mcp-web-field-group">
               <label className="field-label">
@@ -520,7 +535,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
         <div className="about-info">
           <div className="about-meta">
             <div className="about-row"><span className="about-key">Auteur</span><span className="about-val">Pierre COUGET</span></div>
-            <div className="about-row"><span className="about-key">Version</span><span className="about-val">v2.3.0</span></div>
+            <div className="about-row"><span className="about-key">Version</span><span className="about-val">v2.3.1</span></div>
             <div className="about-row">
               <span className="about-key">Contact</span>
               <a className="about-val about-link" href="mailto:ktulu.analog@gmail.com">ktulu.analog@gmail.com ↗</a>

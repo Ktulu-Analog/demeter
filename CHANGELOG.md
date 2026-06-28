@@ -7,6 +7,20 @@ et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 
 ---
 
+## [2.3.1] — 2026-06-28
+
+### Ajouté
+
+- **Nouveaux prompts** — enrichissement des suggestions dans les espaces existants (`prompts.yml`)
+
+### Amélioré
+
+- **Génération SVG** — rendu plus robuste des blocs ` ```svg ` : meilleure gestion des cas limites et qualité visuelle améliorée
+
+### Corrigé
+
+- Corrections de bugs divers
+
 ## [2.3.0] — 2026-06-13
 
 ### Ajouté

@@ -32,7 +32,15 @@ import { CompareModeView } from './components/CompareMode';
 import './CompareMode.css';
 import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
 
-const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', web_search_mcp: '', web_search_mcp_alias: '', mcp_servers: [] };
+const DEFAULT_EXTRA_MODELS = [
+  'openai/gpt-oss-120b',
+  'mistral-medium-2508',
+  'mistralai/Mistral-Small-3.2-24B-Instruct-2506',
+  'mistralai/Ministral-3-8B-Instruct-2512',
+  'Qwen/Qwen3-Coder-30B-A3B-Instruct',
+];
+
+const DEFAULT_SETTINGS: Settings = { endpoint: '', bearer: '', model: '', extra_models: DEFAULT_EXTRA_MODELS, web_search_mcp: '', web_search_mcp_alias: '', mcp_servers: [] };
 
 // Applique immédiatement les préférences de police sur :root
 // Appelé au démarrage ET à chaque changement dans les settings
@@ -113,7 +121,7 @@ function AppInner() {
       } catch { /* JWT illisible — on laisse le backend gérer */ }
     }
 
-    (window as any).__TAURI__?.core?.invoke('init_credentials', {
+    return (window as any).__TAURI__?.core?.invoke('init_credentials', {
       payload: {
         endpoint:                 s.endpoint,
         bearer:                   s.bearer,
@@ -134,8 +142,17 @@ function AppInner() {
 
   const [showSettings,      setShowSettings]      = useState(!settings.endpoint);
 
-  // Initialise AppState Rust dès le démarrage via IPC Tauri (pas HTTP)
-  useEffect(() => { initCredentials(settings); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Initialise AppState Rust dès le démarrage via IPC Tauri (pas HTTP).
+  // On attend la résolution de la Promise avant d'autoriser les fetches HTTP
+  // qui dépendent du bearer token (modèles, utilisateur…).
+  // En parallèle, le bearer est aussi envoyé directement via le header X-Albert-Token
+  // sur ces fetches, ce qui élimine toute dépendance au timing de l'IPC.
+  const [credentialsReady, setCredentialsReady] = useState(false);
+  useEffect(() => {
+    const p = initCredentials(settings);
+    if (p) p.then(() => setCredentialsReady(true)).catch(() => setCredentialsReady(true));
+    else setCredentialsReady(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [showMcpStatus,     setShowMcpStatus]      = useState(false);
   const [showIngestion,     setShowIngestion]      = useState(false);
   const [showPromptsEditor, setShowPromptsEditor]  = useState(false);
@@ -253,22 +270,46 @@ function AppInner() {
   }, [modelDropOpen]);
 
   useEffect(() => {
-    if (!settings.endpoint || !settings.bearer) return;
-    fetch(`${API_BASE}/api-proxy/api/models?endpoint=${encodeURIComponent(settings.endpoint)}`)
-      .then(r => r.ok ? r.json() : null)
+    if (!credentialsReady || !settings.endpoint || !settings.bearer) return;
+    fetch(`${API_BASE}/api-proxy/api/models?endpoint=${encodeURIComponent(settings.endpoint)}`, {
+      headers: { 'X-Albert-Token': settings.bearer },
+    })
+      .then(async r => {
+        if (r.ok) return r.json();
+        // En cas d'échec (ex. 401 sur /v1/models côté Albert), fallback sur
+        // la liste extra_models saisie manuellement dans les paramètres.
+        const fallback = settings.extra_models?.length ? settings.extra_models
+          : settings.model ? [settings.model] : [];
+        if (fallback.length) {
+          setAvailableModels(fallback);
+          if (!activeModel) setActiveModel(settings.model || fallback[0]);
+        }
+        return null;
+      })
       .then((data: { data?: { id: string; max_context_length?: number }[] } | null) => {
+        if (!data) return;
         const ids = data?.data?.map(m => m.id).filter(Boolean) || [];
         setAvailableModels(ids);
         const ctxMap: Record<string, number> = {};
         data?.data?.forEach(m => { if (m.id && m.max_context_length) ctxMap[m.id] = m.max_context_length; });
         setModelMaxCtx(ctxMap);
         if (ids.length && !activeModel) setActiveModel(settings.model || ids[0]);
-      }).catch(() => {});
-  }, [settings.endpoint, settings.bearer, settings.model]);
+      }).catch(() => {
+        // Réseau KO — même fallback
+        const fallback = settings.extra_models?.length ? settings.extra_models
+          : settings.model ? [settings.model] : [];
+        if (fallback.length) {
+          setAvailableModels(fallback);
+          if (!activeModel) setActiveModel(settings.model || fallback[0]);
+        }
+      });
+  }, [credentialsReady, settings.endpoint, settings.bearer, settings.model]);
 
   useEffect(() => {
-    if (!settings.endpoint || !settings.bearer) { setCurrentUser(null); return; }
-    fetch(`${API_BASE}/api-proxy/api/users/me?endpoint=${encodeURIComponent(settings.endpoint)}`)
+    if (!credentialsReady || !settings.endpoint || !settings.bearer) { setCurrentUser(null); return; }
+    fetch(`${API_BASE}/api-proxy/api/users/me?endpoint=${encodeURIComponent(settings.endpoint)}`, {
+      headers: { 'X-Albert-Token': settings.bearer },
+    })
       .then(r => r.ok ? r.json() : null)
       .then((user: CurrentUser | null) => {
         setCurrentUser(user);
@@ -276,7 +317,7 @@ function AppInner() {
         if (user?.email) initCredentials(settings, user.email);
       })
       .catch(() => setCurrentUser(null));
-  }, [settings.endpoint, settings.bearer]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [credentialsReady, settings.endpoint, settings.bearer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Charge les collections Qdrant réelles et nettoie les assignments orphelins
   const refreshCollectionsAndAssignments = useCallback(async () => {
@@ -304,9 +345,9 @@ function AppInner() {
   }, []);
 
   useEffect(() => {
-    if (!settings.endpoint || !settings.bearer) return;
+    if (!credentialsReady || !settings.endpoint || !settings.bearer) return;
     refreshCollectionsAndAssignments();
-  }, [settings.endpoint, settings.bearer, refreshCollectionsAndAssignments]);
+  }, [credentialsReady, settings.endpoint, settings.bearer, refreshCollectionsAndAssignments]);
 
   useEffect(() => {
     const handler = (e: CustomEvent<string>) => {

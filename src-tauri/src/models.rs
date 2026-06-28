@@ -114,6 +114,8 @@ pub struct Chunk {
     #[allow(dead_code)]
     pub score: f64,
     pub rerank_score: Option<f64>,
+    pub image_url: Option<String>,    // URL S3/Garage pour les chunks graphiques
+    pub content_type: Option<String>, // "chart_image" pour les graphiques, None pour le texte
 }
 
 // ── Ingestion ─────────────────────────────────────────────────────────────────

@@ -85,15 +85,33 @@ fn qdrant_client() -> Client {
         .expect("Qdrant client build failed")
 }
 
-/// Retire le suffixe de chemin spécifique à Albert pour obtenir l'URL de base.
+/// Retire le suffixe de chemin spécifique à Albert pour obtenir l'URL de base,
+/// puis normalise vers /v1 (requis par la nouvelle API Albert).
 pub fn albert_base(endpoint: &str) -> String {
     let mut base = endpoint.trim_end_matches('/').to_string();
-    for suffix in &["/chat/completions", "/rerank", "/embeddings", "/search"] {
+    // Strip les suffixes de sous-routes connus (avec ou sans préfixe /v1)
+    for suffix in &[
+        "/v1/chat/completions",
+        "/v1/rerank",
+        "/v1/embeddings",
+        "/v1/search",
+        "/chat/completions",
+        "/rerank",
+        "/embeddings",
+        "/search",
+    ] {
         if base.ends_with(suffix) {
             base = base[..base.len() - suffix.len()].to_string();
+            break;
         }
     }
-    base.trim_end_matches('/').to_string()
+    let base = base.trim_end_matches('/').to_string();
+    // S'assurer que /v1 est présent — la nouvelle API Albert l'exige sur tous les endpoints
+    if base.ends_with("/v1") {
+        base
+    } else {
+        format!("{}/v1", base)
+    }
 }
 
 /// URL de base Qdrant : priorité à l'URL passée depuis les credentials (préférences),
@@ -635,6 +653,63 @@ pub async fn ingest_document(
 
 // ── Search ────────────────────────────────────────────────────────────────────
 
+/// Exécute une recherche vectorielle Qdrant avec un filtre optionnel sur content_type.
+async fn qdrant_vector_search(
+    client: &reqwest::Client,
+    url: &str,
+    vector: &[f32],
+    limit: usize,
+    content_type_filter: Option<&str>,
+    admin_key: Option<&str>,
+    accessible_collections: Option<&[QdrantCollectionAccess]>,
+) -> Option<Value> {
+    let mut body = json!({
+        "vector":       vector,
+        "limit":        limit,
+        "with_payload": true,
+        "with_vector":  false,
+    });
+    if let Some(ct) = content_type_filter {
+        body["filter"] = json!({
+            "must": [{"key": "content_type", "match": {"value": ct}}]
+        });
+    }
+    let req = qdrant_auth(client.post(url).json(&body), admin_key, accessible_collections);
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => { warn!("[qdrant_vector_search] réseau: {}", e); return None; }
+    };
+    if !resp.status().is_success() {
+        warn!("[qdrant_vector_search] HTTP {}", resp.status());
+        return None;
+    }
+    resp.json().await.ok()
+}
+
+/// Parse les résultats bruts Qdrant en Vec<Chunk>.
+fn parse_qdrant_results(data: &Value) -> Vec<Chunk> {
+    let mut chunks = Vec::new();
+    if let Some(results) = data["result"].as_array() {
+        for r in results {
+            let payload = &r["payload"];
+            let text = payload["text"].as_str().unwrap_or("").trim().to_string();
+            if text.is_empty() { continue; }
+            let source   = payload["source"].as_str().unwrap_or("").to_string();
+            let page     = payload["page"].as_str().unwrap_or("").to_string();
+            let doc_id   = payload["doc_id"].as_str().unwrap_or("0").parse().unwrap_or(0);
+            let score    = r["score"].as_f64().unwrap_or(0.0);
+            let image_url = payload["image_storage_url"]
+                .as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+            let content_type = payload["content_type"]
+                .as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+            info!("[search_chunks] chunk content_type={:?} image_url={:?}", content_type, image_url);
+            chunks.push(Chunk { text, source, page, document_id: doc_id, score,
+                rerank_score: None, image_url, content_type });
+        }
+    }
+    chunks
+}
+
 pub async fn search_chunks(
     query: &str,
     collection_name: &str,
@@ -658,12 +733,6 @@ pub async fn search_chunks(
         qdrant_base_url(qdrant_url),
         collection_name
     );
-    let body = json!({
-        "vector":       vector,
-        "limit":        config::rag_top_k(),
-        "with_payload": true,
-        "with_vector":  false,
-    });
     tracing::info!(
         "[TRACE search_chunks] url={} admin_key={} accessible_collections={:?}",
         url,
@@ -672,65 +741,44 @@ pub async fn search_chunks(
             .unwrap_or("none"),
         accessible_collections.map(|c| c.iter().map(|x| x.collection.as_str()).collect::<Vec<_>>()),
     );
-    let req = qdrant_auth(
-        client.post(&url).json(&body),
-        admin_key,
-        accessible_collections,
-    );
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            warn!("[TRACE search_chunks] Erreur réseau Qdrant: {}", e);
-            return vec![];
-        }
+
+    // ── Recherche 1 : chunks texte (top-K global) ────────────────────────────
+    let data_text = match qdrant_vector_search(
+        &client, &url, &vector,
+        config::rag_top_k(), None,
+        admin_key, accessible_collections,
+    ).await {
+        Some(d) => d,
+        None => return vec![],
     };
 
-    let http_status = resp.status();
-    if !http_status.is_success() {
-        let body_text = resp.text().await.unwrap_or_default();
-        warn!(
-            "[TRACE search_chunks] Qdrant HTTP {} — body={:?}",
-            http_status,
-            &body_text[..body_text.len().min(300)]
-        );
-        return vec![];
-    }
-    tracing::info!("[TRACE search_chunks] Qdrant HTTP {}", http_status);
+    let nb_results = data_text["result"].as_array().map(|a| a.len()).unwrap_or(0);
+    tracing::info!("[TRACE search_chunks] Qdrant résultats bruts: {}", nb_results);
+    let mut chunks = parse_qdrant_results(&data_text);
 
-    let data: Value = match resp.json().await {
-        Ok(v) => v,
-        Err(e) => {
-            warn!("Qdrant search parse error: {}", e);
-            return vec![];
-        }
-    };
-
-    let nb_results = data["result"].as_array().map(|a| a.len()).unwrap_or(0);
-    tracing::info!(
-        "[TRACE search_chunks] Qdrant résultats bruts: {}",
-        nb_results
-    );
-    let mut chunks: Vec<Chunk> = Vec::new();
-    if let Some(results) = data["result"].as_array() {
-        for r in results {
-            let payload = &r["payload"];
-            let text = payload["text"].as_str().unwrap_or("").trim().to_string();
-            if text.is_empty() {
-                continue;
-            }
-            let source = payload["source"].as_str().unwrap_or("").to_string();
-            let page = payload["page"].as_str().unwrap_or("").to_string();
-            let doc_id_str = payload["doc_id"].as_str().unwrap_or("0").to_string();
-            let score = r["score"].as_f64().unwrap_or(0.0);
-
-            chunks.push(Chunk {
-                text,
-                source,
-                page,
-                document_id: doc_id_str.parse().unwrap_or(0),
-                score,
-                rerank_score: None,
-            });
+    // ── Recherche 2 : chunks chart_image dédiée ──────────────────────────────
+    // Garantit que des images pertinentes remontent indépendamment du top-K texte.
+    let image_top_k = config::rag_image_top_k();
+    if image_top_k > 0 {
+        if let Some(data_img) = qdrant_vector_search(
+            &client, &url, &vector,
+            image_top_k, Some("chart_image"),
+            admin_key, accessible_collections,
+        ).await {
+            let img_chunks = parse_qdrant_results(&data_img);
+            let nb_img = img_chunks.len();
+            // Dédoublonner : ne garder que les images pas déjà dans chunks texte
+            let existing_texts: std::collections::HashSet<String> =
+                chunks.iter().map(|c| c.text.clone()).collect();
+            let new_images: Vec<Chunk> = img_chunks
+                .into_iter()
+                .filter(|c| !existing_texts.contains(&c.text))
+                .collect();
+            info!(
+                "[search_chunks] image search dédiée: {} résultats, {} nouveaux",
+                nb_img, new_images.len()
+            );
+            chunks.extend(new_images);
         }
     }
 
@@ -760,6 +808,20 @@ pub async fn rerank_chunks(
         Err(_) => return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec(),
     };
 
+    // Les chunks graphiques ne sont pas soumis au reranker (texte VLM peu pertinent
+    // pour la similarité avec la question). On les conserve à part et on les
+    // réinjecte après, limités à 3 pour ne pas surcharger le contexte.
+    let (image_chunks, text_chunks): (Vec<Chunk>, Vec<Chunk>) = chunks
+        .into_iter()
+        .partition(|c| c.content_type.as_deref() == Some("chart_image"));
+    let chunks = text_chunks;
+
+    if chunks.is_empty() {
+        let kept: Vec<Chunk> = image_chunks.into_iter().take(3).collect();
+        info!("Rerank: 0 text chunks, {} image chunks conservés", kept.len());
+        return kept;
+    }
+
     let texts: Vec<&str> = chunks.iter().map(|c| c.text.as_str()).collect();
     let body = json!({
         "model":     config::rerank_model(),
@@ -767,6 +829,18 @@ pub async fn rerank_chunks(
         "documents": texts,
         "top_n":     config::rag_top_rerank(),
     });
+
+    // Helper : fallback avec réinjection des images
+    macro_rules! fallback_with_images {
+        ($text_chunks:expr, $image_chunks:expr) => {{
+            let top = config::rag_top_rerank();
+            let mut result: Vec<Chunk> = $text_chunks[..top.min($text_chunks.len())].to_vec();
+            let img_count = $image_chunks.len().min(3);
+            result.extend($image_chunks.into_iter().take(3));
+            info!("Rerank fallback: {} text + {} image(s)", result.len() - img_count, img_count);
+            return result;
+        }};
+    }
 
     let resp = match client
         .post(format!("{}/rerank", base))
@@ -778,18 +852,20 @@ pub async fn rerank_chunks(
         Ok(r) => r,
         Err(e) => {
             warn!("Reranking failed ({}), fallback", e);
-            return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec();
+            fallback_with_images!(chunks, image_chunks);
         }
     };
 
     if !resp.status().is_success() {
         warn!("Rerank HTTP {}", resp.status());
-        return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec();
+        fallback_with_images!(chunks, image_chunks);
     }
 
     let data: Value = match resp.json().await {
         Ok(v) => v,
-        Err(_) => return chunks[..config::rag_top_rerank().min(chunks.len())].to_vec(),
+        Err(_) => {
+            fallback_with_images!(chunks, image_chunks);
+        }
     };
 
     let min_score = config::rag_min_score();
@@ -816,11 +892,16 @@ pub async fn rerank_chunks(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    // Réinjecter les chunks graphiques (max 3) à la fin du contexte
+    let image_count = image_chunks.len().min(3);
+    reranked.extend(image_chunks.into_iter().take(3));
+
     info!(
-        "Rerank: {} → {} chunks (threshold={})",
+        "Rerank: {} → {} chunks (threshold={}) + {} image(s)",
         chunks.len(),
-        reranked.len(),
-        min_score
+        reranked.len() - image_count,
+        min_score,
+        image_count,
     );
     reranked
 }
@@ -893,7 +974,28 @@ pub fn chunks_to_context(chunks: &[Chunk]) -> String {
                     meta.push_str(&format!(", p.{}", c.page));
                 }
             }
-            format!("{}\n{}", meta, c.text)
+            info!(
+                "[chunks_to_context] chunk[{}] content_type={:?} image_url={:?}",
+                i, c.content_type, c.image_url
+            );
+            let image_part = if let Some(ref url) = c.image_url {
+                // Extraire le champ TITRE de la description VLM comme texte alternatif.
+                // Un alt contenant des newlines ou crochets casse le rendu Markdown inline.
+                let alt: String = c.text
+                    .lines()
+                    .find(|l| l.trim_start().starts_with("TITRE"))
+                    .and_then(|l| l.splitn(2, ':').nth(1))
+                    .unwrap_or(&c.text)
+                    .trim()
+                    .chars()
+                    .take(80)
+                    .filter(|ch| *ch != '[' && *ch != ']' && *ch != '\n' && *ch != '\r')
+                    .collect();
+                format!("\n![{}]({})", alt, url)
+            } else {
+                String::new()
+            };
+            format!("{}\n{}{}", meta, c.text, image_part)
         })
         .collect::<Vec<_>>()
         .join("\n\n---\n\n")
@@ -902,7 +1004,18 @@ pub fn chunks_to_context(chunks: &[Chunk]) -> String {
 pub fn build_system_with_rag(base_system: &str, context: Option<&str>) -> String {
     match context {
         None => base_system.to_string(),
-        Some(ctx) => format!(
+        Some(ctx) => {
+            // Log des URLs d'images présentes dans le contexte pour debug
+            let image_count = ctx.matches("![").count();
+            tracing::info!("[build_system_with_rag] contexte: {} images détectées", image_count);
+            let mut idx_img = 0usize;
+            for (i, line) in ctx.lines().enumerate() {
+                if line.contains("![") {
+                    tracing::info!("[build_system_with_rag] image[{}] ligne {}: {}", idx_img, i, &line[..line.len().min(120)]);
+                    idx_img += 1;
+                }
+            }
+            format!(
             "{}\n\n{}\nCONTEXTE DOCUMENTAIRE (extraits de la base de connaissances)\n{}\n{}\n\n\
              INSTRUCTIONS :\n\
              - Appuie-toi prioritairement sur les extraits ci-dessus.\n\
@@ -913,6 +1026,7 @@ pub fn build_system_with_rag(base_system: &str, context: Option<&str>) -> String
             "══════════════════════════════════════════════",
             ctx,
             "══════════════════════════════════════════════"
-        ),
+            )
+        }
     }
 }

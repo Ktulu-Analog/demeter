@@ -772,7 +772,7 @@ checksum = "ac6b926516df9c60bfa16e107b21086399f8285a44ca9711344b9e553c5146e2"
 
 [[package]]
 name = "demeter"
-version = "2.3.0"
+version = "2.3.1"
 dependencies = [
  "anyhow",
  "axum",

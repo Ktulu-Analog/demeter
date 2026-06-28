@@ -107,6 +107,11 @@ pub fn rag_min_score() -> f64 {
     env_f64("RAG_MIN_SCORE", 0.15)
 }
 
+/// Nombre de chunks chart_image récupérés via la recherche dédiée images (défaut : 5).
+pub fn rag_image_top_k() -> usize {
+    env_usize("RAG_IMAGE_TOP_K", 5)
+}
+
 // ── LLM ───────────────────────────────────────────────────────────────────────
 
 /// Nombre maximum de tokens pour les appels LLM principaux (défaut : 100000).
@@ -119,9 +124,9 @@ pub fn title_max_tokens() -> u64 {
     env_u64("TITLE_MAX_TOKENS", 20)
 }
 
-/// Nombre maximum de tours dans la boucle agentique MCP (défaut : 5).
+/// Nombre maximum de tours dans la boucle agentique MCP (défaut : 12).
 pub fn mcp_max_turns() -> usize {
-    env_usize("MCP_MAX_TURNS", 5)
+    env_usize("MCP_MAX_TURNS", 12)
 }
 
 /// Taille maximum en bytes du premier message utilisateur pour le titrage (défaut : 1200).

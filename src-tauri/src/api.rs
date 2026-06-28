@@ -1218,12 +1218,18 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
     }
 
     // ── Sans MCP : chemin normal ──────────────────────────────────────────────
-    let payload = json!({
+    let mut payload = json!({
         "model":      req.model,
         "messages":   messages_payload,
         "stream":     req.stream,
         "max_tokens": config::llm_max_tokens(),
     });
+    // Demander à Albert d'inclure les stats d'usage (tokens + impacts CO₂) dans
+    // le dernier chunk SSE. Sans stream_options, l'API Albert ne renvoie pas de
+    // bloc usage en mode streaming → le CO₂ n'était plus affiché.
+    if req.stream {
+        payload["stream_options"] = json!({ "include_usage": true });
+    }
 
     if req.stream {
         // Streaming SSE passthrough
@@ -1461,13 +1467,31 @@ struct EndpointParams {
     pub endpoint: String,
 }
 
+/// Extrait le bearer token depuis les headers de la requête entrante.
+/// Le frontend envoie `X-Albert-Token: <bearer>` pour éviter la race condition
+/// entre l'IPC Tauri (init_credentials) et les requêtes HTTP de démarrage.
+/// Si le header est absent ou vide, on retombe sur le token stocké dans AppState.
+fn bearer_from_header_or_state(
+    headers: &axum::http::HeaderMap,
+    state_bearer: &str,
+) -> String {
+    headers
+        .get("x-albert-token")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| state_bearer.to_string())
+}
+
 // ── User info ─────────────────────────────────────────────────────────────────
 
 async fn get_user_me(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<EndpointParams>,
 ) -> Response {
     let creds = state.credentials.read().await.clone();
+    let bearer = bearer_from_header_or_state(&headers, &creds.bearer);
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
         .timeout(config::timeout_doc_resolve())
@@ -1478,7 +1502,7 @@ async fn get_user_me(
 
     match client
         .get(format!("{}/me/info", base))
-        .bearer_auth(&creds.bearer)
+        .bearer_auth(&bearer)
         .send()
         .await
     {
@@ -1499,9 +1523,11 @@ async fn get_user_me(
 
 async fn list_models(
     State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
     Query(params): Query<EndpointParams>,
 ) -> Response {
     let creds = state.credentials.read().await.clone();
+    let bearer = bearer_from_header_or_state(&headers, &creds.bearer);
     let base = albert_base(&params.endpoint);
     let client = Client::builder()
         .timeout(config::timeout_doc_resolve())
@@ -1512,7 +1538,7 @@ async fn list_models(
 
     match client
         .get(format!("{}/models", base))
-        .bearer_auth(&creds.bearer)
+        .bearer_auth(&bearer)
         .send()
         .await
     {

@@ -12,9 +12,104 @@
 // ============================================================================
 
 
-import React, { useState, useEffect } from 'react';
-import { API_BASE, DOT_OPTIONS } from '../constants';
+import React, { useState, useEffect, useRef } from 'react';
+import ReactDOM from 'react-dom';
+import { API_BASE, DOT_OPTIONS, ICON_OPTIONS } from '../constants';
 import { slugify } from '../utils/text';
+
+/* ── Contexte singleton : un seul IconPicker ouvert à la fois ────────────── */
+const IconPickerCtx = React.createContext<{
+  openId: string | null;
+  setOpenId: (id: string | null) => void;
+}>({ openId: null, setOpenId: () => {} });
+
+let _iconPickerCounter = 0;
+
+/* ── Sélecteur d'icône style gélule (portal — toujours au premier plan) ──── */
+function IconPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const id = useRef(`ip_${++_iconPickerCounter}`).current;
+  const { openId, setOpenId } = React.useContext(IconPickerCtx);
+  const open = openId === id;
+
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+  const pillRef = useRef<HTMLButtonElement>(null);
+  const popRef  = useRef<HTMLDivElement>(null);
+
+  /* fermer au clic extérieur */
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (pillRef.current?.contains(t) || popRef.current?.contains(t)) return;
+      setOpenId(null);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  /* fermer au scroll / resize */
+  useEffect(() => {
+    if (!open) return;
+    const close = () => setOpenId(null);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [open]);
+
+  const handleOpen = () => {
+    if (open) { setOpenId(null); return; }
+    if (pillRef.current) {
+      const r = pillRef.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - r.bottom;
+      if (spaceBelow < 260) {
+        setPos({ bottom: window.innerHeight - r.top + 6, left: r.left });
+      } else {
+        setPos({ top: r.bottom + 6, left: r.left });
+      }
+    }
+    setOpenId(id);
+  };
+
+  const popover = open && pos ? ReactDOM.createPortal(
+    <div
+      ref={popRef}
+      className="pe-icon-popover"
+      style={{ position: 'fixed', zIndex: 9999, ...pos }}
+    >
+      {ICON_OPTIONS.map(opt => (
+        <button
+          key={opt.value}
+          type="button"
+          title={opt.label}
+          className={`pe-icon-cell${opt.value === value ? ' pe-icon-cell--active' : ''}`}
+          onClick={() => { onChange(opt.value); setOpenId(null); }}
+        >
+          {opt.value}
+        </button>
+      ))}
+    </div>,
+    document.body
+  ) : null;
+
+  return (
+    <div className="pe-icon-picker">
+      <button
+        ref={pillRef}
+        type="button"
+        className="pe-icon-pill"
+        onClick={handleOpen}
+        title="Choisir une icône"
+      >
+        <span className="pe-icon-pill-emoji">{value || '💬'}</span>
+        <span className="pe-icon-pill-chevron">{open ? '▲' : '▼'}</span>
+      </button>
+      {popover}
+    </div>
+  );
+}
 
 interface Prompt {
   icon: string;
@@ -43,13 +138,16 @@ const newPrompt = (): Prompt => ({ icon: '💬', label: '', prompt: '', _key: Ma
 const newSpace  = (): Space  => ({ id: '', icon: '💬', label: '', dot: '', system: '', prompts: [newPrompt()], _key: Math.random() });
 
 export function PromptsEditorModal({ onClose, onSpacesUpdated }: PromptsEditorModalProps) {
+  const [openPickerId, setOpenPickerId] = useState<string | null>(null);
   const [spaces, setSpaces]           = useState<Space[] | null>(null);
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [saving, setSaving]           = useState(false);
   const [error, setError]             = useState('');
   const [dirty, setDirty]             = useState(false);
-  const [dragOver, setDragOver]       = useState<number | null>(null);
-  const [dragIdx, setDragIdx]         = useState<number | null>(null);
+  const [dragOver, setDragOver]             = useState<number | null>(null);
+  const [dragIdx, setDragIdx]               = useState<number | null>(null);
+  const [dragSpaceIdx, setDragSpaceIdx]     = useState<number | null>(null);
+  const [dragSpaceOver, setDragSpaceOver]   = useState<number | null>(null);
 
   useEffect(() => {
     fetch(`${API_BASE}/api-proxy/api/spaces`)
@@ -130,6 +228,45 @@ export function PromptsEditorModal({ onClose, onSpacesUpdated }: PromptsEditorMo
     setDragOver(null); setDragIdx(null); markDirty();
   };
 
+  // ── Drag & drop des espaces dans la sidebar ─────────────────────────────────
+  const onSpaceDragStart = (e: React.DragEvent, idx: number) => {
+    setDragSpaceIdx(idx);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(idx));
+  };
+
+  const onSpaceListDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const item = (e.target as HTMLElement).closest<HTMLElement>('[data-space-idx]');
+    if (!item) return;
+    const idx = parseInt(item.dataset.spaceIdx ?? '-1', 10);
+    if (!isNaN(idx) && idx !== dragSpaceIdx) setDragSpaceOver(idx);
+  };
+
+  const onSpaceListDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setDragSpaceOver(null);
+  };
+
+  const onSpaceListDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const item = (e.target as HTMLElement).closest<HTMLElement>('[data-space-idx]');
+    const toIdx = item ? parseInt(item.dataset.spaceIdx ?? '-1', 10) : -1;
+    if (dragSpaceIdx === null || toIdx === -1 || dragSpaceIdx === toIdx) {
+      setDragSpaceOver(null); setDragSpaceIdx(null); return;
+    }
+    setSpaces(prev => {
+      const next = [...prev!];
+      const [moved] = next.splice(dragSpaceIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
+    // Maintenir la sélection sur le même espace après le déplacement
+    setSelectedIdx(toIdx);
+    setDragSpaceOver(null); setDragSpaceIdx(null); markDirty();
+  };
+
   const handleSave = async () => {
     setSaving(true); setError('');
     try {
@@ -160,11 +297,12 @@ export function PromptsEditorModal({ onClose, onSpacesUpdated }: PromptsEditorMo
   };
 
   return (
+    <IconPickerCtx.Provider value={{ openId: openPickerId, setOpenId: setOpenPickerId }}>
     <div className="modal-overlay">
       <div className="modal pe-modal">
 
         <div className="modal-header">
-          <div className="modal-header-left">component map factory
+          <div className="modal-header-left">
             <span className="modal-icon">✏️</span>
             <span className="modal-title">Éditeur d'espaces &amp; prompts</span>
             {dirty && <span className="pe-dirty-badge">● non sauvegardé</span>}
@@ -176,16 +314,26 @@ export function PromptsEditorModal({ onClose, onSpacesUpdated }: PromptsEditorMo
 
           {/* ── Sidebar ── */}
           <div className="pe-sidebar">
-            <div className="pe-sidebar-title">Espaces</div>
-            <div className="pe-space-list">
+            <div className="pe-sidebar-title">Espaces <span className="pe-section-hint">— glissez ⠿ pour réordonner</span></div>
+            <div
+              className="pe-space-list"
+              onDragOver={onSpaceListDragOver}
+              onDragLeave={onSpaceListDragLeave}
+              onDrop={onSpaceListDrop}
+            >
               {spaces === null
                 ? <div className="pe-loading">Chargement…</div>
                 : spaces.map((s, i) => (
                   <div
                     key={s._key}
-                    className={`pe-space-item ${i === selectedIdx ? 'pe-space-item--active' : ''}`}
+                    data-space-idx={i}
+                    className={`pe-space-item${i === selectedIdx ? ' pe-space-item--active' : ''}${dragSpaceOver === i ? ' pe-space-item--dragover' : ''}${dragSpaceIdx === i ? ' pe-space-item--dragging' : ''}`}
+                    draggable
+                    onDragStart={e => onSpaceDragStart(e, i)}
+                    onDragEnd={() => { setDragSpaceOver(null); setDragSpaceIdx(null); }}
                     onClick={() => setSelectedIdx(i)}
                   >
+                    <span className="pe-drag-handle pe-space-drag-handle" title="Glisser pour réordonner">⠿</span>
                     <span className="pe-space-icon">{s.icon || '💬'}</span>
                     <div className="pe-space-meta">
                       <span className="pe-space-label">{s.label || <em style={{ opacity: .5 }}>Sans nom</em>}</span>
@@ -223,7 +371,7 @@ export function PromptsEditorModal({ onClose, onSpacesUpdated }: PromptsEditorMo
                   <div className="pe-fields-row">
                     <div className="field-group pe-field-icon">
                       <label className="field-label">Icône</label>
-                      <input className="field-input pe-icon-input" value={space.icon} onChange={e => updateSpace('icon', e.target.value)} maxLength={4} />
+                      <IconPicker value={space.icon} onChange={v => updateSpace('icon', v)} />
                     </div>
                     <div className="field-group" style={{ flex: 1 }}>
                       <label className="field-label">Nom affiché</label>
@@ -288,7 +436,9 @@ export function PromptsEditorModal({ onClose, onSpacesUpdated }: PromptsEditorMo
                       >
                         <div className="pe-prompt-card-header">
                           <span className="pe-drag-handle" title="Glisser pour déplacer">⠿</span>
-                          <input className="field-input pe-prompt-icon" value={p.icon} onChange={e => updatePrompt(pi, 'icon', e.target.value)} maxLength={4} title="Emoji" onMouseDown={e => e.stopPropagation()} />
+                          <span onMouseDown={e => e.stopPropagation()}>
+                            <IconPicker value={p.icon} onChange={v => updatePrompt(pi, 'icon', v)} />
+                          </span>
                           <input className="field-input pe-prompt-label" value={p.label} onChange={e => updatePrompt(pi, 'label', e.target.value)} placeholder="Titre affiché…" maxLength={40} onMouseDown={e => e.stopPropagation()} />
                           <button className="pe-del-btn" title="Supprimer" onClick={() => deletePrompt(pi)}>✕</button>
                         </div>
@@ -320,5 +470,6 @@ export function PromptsEditorModal({ onClose, onSpacesUpdated }: PromptsEditorMo
         </div>
       </div>
     </div>
+    </IconPickerCtx.Provider>
   );
 }
