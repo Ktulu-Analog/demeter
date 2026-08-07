@@ -223,10 +223,26 @@ pub async fn list_tools(client: &Client, server_url: &str) -> (Vec<Value>, bool)
 
 /// Convertit un tool MCP au format OpenAI function tool.
 pub fn mcp_tool_to_openai(tool: &Value, server_url: &str) -> Value {
+    let tool_name = tool["name"].as_str().unwrap_or("unknown");
+    let fn_name = format!("mcp__{}__{}", slugify(server_url), tool_name);
+
+    // Filet de sécurité : l'API rejette tout nom de fonction > 64 caractères.
+    // Avec SLUG_MAX_LEN=12 ça ne devrait plus arriver, mais si un futur outil
+    // MCP a un nom très long, on préfère le signaler bruyamment dans les logs
+    // plutôt que de laisser l'appel échouer en silence côté API.
+    if fn_name.len() > 64 {
+        warn!(
+            "MCP: nom de fonction '{}' ({} caractères) dépasse la limite de 64 imposée par l'API — \
+             l'outil '{}' du serveur '{}' risque de provoquer une erreur 400. \
+             Envisagez de raccourcir SLUG_MAX_LEN ou le nom de l'outil côté serveur MCP.",
+            fn_name, fn_name.len(), tool_name, server_url
+        );
+    }
+
     json!({
         "type": "function",
         "function": {
-            "name": format!("mcp__{}__{}", slugify(server_url), tool["name"].as_str().unwrap_or("unknown")),
+            "name": fn_name,
             "description": tool["description"].as_str().unwrap_or(""),
             "parameters": tool.get("inputSchema").cloned().unwrap_or(json!({"type":"object","properties":{}}))
         }
@@ -284,30 +300,6 @@ pub async fn call_tool(
     }
 }
 
-/// Collecte tous les tools de tous les serveurs MCP configurés.
-pub async fn collect_all_tools(client: &Client, servers: &[String]) -> Vec<(String, Value)> {
-    let futures: Vec<_> = servers
-        .iter()
-        .map(|server| {
-            let client = client.clone();
-            let server = server.clone();
-            async move {
-                let (tools, _ok) = list_tools(&client, &server).await;
-                info!("MCP: {} tools depuis {}", tools.len(), server);
-                tools
-                    .into_iter()
-                    .map(move |t| (server.clone(), t))
-                    .collect::<Vec<_>>()
-            }
-        })
-        .collect();
-    futures::future::join_all(futures)
-        .await
-        .into_iter()
-        .flatten()
-        .collect()
-}
-
 /// Extrait le contenu d'une réponse MCP (texte + image optionnelle).
 fn extract_content(data: &Value) -> McpToolResult {
     if let Some(content) = data["content"].as_array() {
@@ -355,6 +347,16 @@ pub fn server_slug(url: &str) -> String {
     slugify(url)
 }
 
+// Longueur max du slug serveur dans les noms de fonction `mcp__{slug}__{outil}`.
+//
+// L'API impose un nom de fonction total <= 64 caractères. Avec le préfixe
+// "mcp__" (5) et le séparateur "__" (2), et le plus long nom d'outil connu
+// à ce jour (legifrance_lister_questions_parlementaires, 42 caractères),
+// il reste 64 - 5 - 2 - 42 = 15 caractères disponibles pour le slug.
+// On se limite à 12 pour garder de la marge si des outils plus longs
+// apparaissent, tout en restant suffisamment distinctif entre serveurs.
+const SLUG_MAX_LEN: usize = 12;
+
 fn slugify(url: &str) -> String {
     url.trim_start_matches("https://")
         .trim_start_matches("http://")
@@ -364,6 +366,6 @@ fn slugify(url: &str) -> String {
         .trim_matches('_')
         .to_string()
         .chars()
-        .take(20)
+        .take(SLUG_MAX_LEN)
         .collect()
 }

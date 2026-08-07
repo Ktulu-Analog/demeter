@@ -13,7 +13,8 @@
 
 
 import React, { useState, useEffect } from 'react';
-import { API_BASE } from '../constants';
+import { API_BASE, DEFAULT_AUDIO_SUMMARY_PROMPTS } from '../constants';
+import type { AudioSummaryPrompt } from '../constants';
 
 // Applique immédiatement les préférences de police sur :root pour preview live
 function applyFontPrefs(fontFamily?: string, fontSize?: number) {
@@ -40,8 +41,14 @@ export interface Settings {
   web_search_mcp?: string;
   web_search_mcp_alias?: string;
   mcp_servers?: { url: string; alias?: string }[];
+  /// Dossier choisi par l'utilisateur pour ses serveurs MCP stdio (mcp-*).
+  mcp_dir?: string;
+  /// Valeurs de configuration saisies dans le panel MCP, par serveur (id du
+  /// manifest) puis par clé de paramètre (ex : mcp_stdio_config['mcp-grist']['GRIST_API_KEY']).
+  mcp_stdio_config?: Record<string, Record<string, string>>;
   font_family?: string;
   font_size?: number;
+  audio_summary_prompts?: AudioSummaryPrompt[]; // prompts de résumé auto pour la transcription audio
 }
 
 interface McpTool {
@@ -54,6 +61,27 @@ interface McpServerStatus {
   status: 'ok' | 'error';
   tools: McpTool[];
   tool_count: number;
+}
+
+/// Un paramètre de configuration attendu par un serveur MCP stdio (clé
+/// d'API…), tel que retourné dans le manifest par GET /api/mcp/stdio/servers.
+export interface StdioParam {
+  key: string;
+  label: string;
+  secret?: boolean;
+  required?: boolean;
+  default?: string;
+  help?: string;
+}
+
+/// Un MCP stdio découvert dans le répertoire dédié (officiel ou ajouté
+/// manuellement), tel que retourné par GET /api/mcp/stdio/servers.
+export interface StdioServerInfo {
+  id: string;
+  name: string;
+  description?: string;
+  available: boolean; // false si aucun binaire pour cette plateforme
+  params: StdioParam[];
 }
 
 // ── Préréglages de polices ─────────────────────────────────────────────────────
@@ -81,11 +109,30 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps) {
-  const [form, setForm]         = useState<Settings>({ ...settings, mcp_servers: settings.mcp_servers || [] });
-  const [newMcp, setNewMcp]     = useState('');
-  const [newMcpAlias, setNewMcpAlias] = useState('');
+  const [form, setForm]         = useState<Settings>({
+    ...settings,
+    mcp_servers: settings.mcp_servers || [],
+    audio_summary_prompts: settings.audio_summary_prompts?.length ? settings.audio_summary_prompts : DEFAULT_AUDIO_SUMMARY_PROMPTS,
+  });
   const [resetting, setResetting] = useState(false);
   const [resetDone, setResetDone] = useState(false);
+
+  const updateSummaryPrompt = (i: number, field: keyof AudioSummaryPrompt, val: string) =>
+    setForm(f => ({
+      ...f,
+      audio_summary_prompts: (f.audio_summary_prompts || []).map((p, j) => j === i ? { ...p, [field]: val } : p),
+    }));
+
+  const addSummaryPrompt = () =>
+    setForm(f => ({
+      ...f,
+      audio_summary_prompts: [...(f.audio_summary_prompts || []), { id: `prompt-${Date.now()}`, label: '', prompt: '' }],
+    }));
+
+  const removeSummaryPrompt = (i: number) =>
+    setForm(f => ({ ...f, audio_summary_prompts: (f.audio_summary_prompts || []).filter((_, j) => j !== i) }));
+
+  const resetSummaryPrompts = () => setForm(f => ({ ...f, audio_summary_prompts: DEFAULT_AUDIO_SUMMARY_PROMPTS }));
 
   const handleResetPrompts = async () => {
     if (!window.confirm('Réinitialiser tous les espaces et prompts à leurs valeurs par défaut ? Cette action est irréversible.')) return;
@@ -105,28 +152,6 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
     setForm(f => ({ ...f, [k]: e.target.value }));
 
   const canSave = !!(form.endpoint && form.bearer && form.model);
-
-  const addMcp = () => {
-    let url = newMcp.trim();
-    if (!url) return;
-    if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
-    if ((form.mcp_servers || []).some(s => s.url === url)) { setNewMcp(''); setNewMcpAlias(''); return; }
-    const alias = newMcpAlias.trim() || undefined;
-    setForm(f => ({ ...f, mcp_servers: [...(f.mcp_servers || []), { url, alias }] }));
-    setNewMcp('');
-    setNewMcpAlias('');
-  };
-
-  const removeMcp = (i: number) =>
-    setForm(f => ({ ...f, mcp_servers: (f.mcp_servers || []).filter((_, j) => j !== i) }));
-
-  const updateMcpAlias = (i: number, alias: string) =>
-    setForm(f => ({
-      ...f,
-      mcp_servers: (f.mcp_servers || []).map((s, j) =>
-        j === i ? { ...s, alias: alias.trim() || undefined } : s
-      )
-    }));
 
   return (
     <div className="modal-overlay">
@@ -307,68 +332,53 @@ export function SettingsModal({ settings, onSave, onClose }: SettingsModalProps)
           {/* Séparateur */}
           <div className="settings-divider" />
 
-          {/* ── Colonne 3 — Serveurs MCP ── */}
+          {/* ── Colonne 3 — Résumé audio ── */}
           <div className="settings-col">
-            <div className="settings-section-title">Serveurs MCP</div>
+            <div className="settings-section-title">Résumé audio</div>
             <div className="field-hint">
-              <span className="hint-icon">🔌</span>
-              <span>Connecteurs qui étendent les capacités du LLM (filesystem, calendrier, SIRH…)</span>
+              <span className="hint-icon">📝</span>
+              <span>Prompts proposés dans la transcription audio pour générer un résumé automatique.</span>
             </div>
 
             <div className="mcp-cards-list">
-              {(form.mcp_servers || []).length === 0 && (
-                <div className="mcp-empty-state">
-                  <span className="mcp-empty-icon">🔌</span>
-                  <span>Aucun serveur configuré</span>
-                </div>
-              )}
-              {(form.mcp_servers || []).map((srv, i) => (
+              {(form.audio_summary_prompts || []).map((p, i) => (
                 <div key={i} className="mcp-card">
                   <div className="mcp-card__accent" />
                   <div className="mcp-card__body">
                     <div className="mcp-card__top">
-                      <span className="mcp-card__icon">⚡</span>
+                      <span className="mcp-card__icon">💬</span>
                       <input
                         className="mcp-card__alias-input"
-                        value={srv.alias || ''}
-                        onChange={e => updateMcpAlias(i, e.target.value)}
-                        placeholder="Nom du serveur…"
+                        value={p.label}
+                        onChange={e => updateSummaryPrompt(i, 'label', e.target.value)}
+                        placeholder="Nom du prompt (ex : Synthèse)"
                         spellCheck={false}
                       />
-                      <button className="mcp-card__remove" onClick={() => removeMcp(i)} title="Supprimer">✕</button>
+                      <button className="mcp-card__remove" onClick={() => removeSummaryPrompt(i)} title="Supprimer">✕</button>
                     </div>
-                    <span className="mcp-card__url" title={srv.url}>{srv.url}</span>
+                    <textarea
+                      className="field-input field-textarea"
+                      rows={5}
+                      value={p.prompt}
+                      onChange={e => updateSummaryPrompt(i, 'prompt', e.target.value)}
+                      placeholder="Instructions envoyées au LLM avec la transcription…"
+                      spellCheck={false}
+                    />
                   </div>
                 </div>
               ))}
             </div>
 
-            <div className="mcp-add-card">
-              <div className="mcp-add-card__icon">＋</div>
-              <div className="mcp-add-card__fields">
-                <input
-                  className="field-input"
-                  value={newMcp}
-                  onChange={e => setNewMcp(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && addMcp()}
-                  placeholder="http://localhost:3001/sse"
-                  spellCheck={false}
-                />
-                <input
-                  className="field-input mcp-add-alias"
-                  value={newMcpAlias}
-                  onChange={e => setNewMcpAlias(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && addMcp()}
-                  placeholder="Nom (optionnel)"
-                  spellCheck={false}
-                />
-              </div>
-              <button className="mcp-add-btn" onClick={addMcp}>Ajouter</button>
-            </div>
-
-            <div className="field-hint">
-              <span className="hint-icon">💡</span>
-              <span>Ces paramètres sont sauvegardés localement et ne sont jamais transmis à un tiers.</span>
+            <div className="pe-add-prompt-btn-row" style={{ display: 'flex', gap: 8 }}>
+              <button className="pe-add-prompt-btn" onClick={addSummaryPrompt}>
+                <svg viewBox="0 0 16 16" fill="currentColor" width="11" height="11">
+                  <path d="M8 2a1 1 0 011 1v4h4a1 1 0 110 2H9v4a1 1 0 11-2 0V9H3a1 1 0 110-2h4V3a1 1 0 011-1z"/>
+                </svg>
+                Ajouter un prompt
+              </button>
+              <button className="btn-ghost" onClick={resetSummaryPrompts} title="Restaurer les 3 prompts par défaut">
+                ↺ Valeurs par défaut
+              </button>
             </div>
           </div>
 
@@ -535,7 +545,7 @@ export function AboutModal({ onClose }: { onClose: () => void }) {
         <div className="about-info">
           <div className="about-meta">
             <div className="about-row"><span className="about-key">Auteur</span><span className="about-val">Pierre COUGET</span></div>
-            <div className="about-row"><span className="about-key">Version</span><span className="about-val">v2.3.1</span></div>
+            <div className="about-row"><span className="about-key">Version</span><span className="about-val">v2.4.0</span></div>
             <div className="about-row">
               <span className="about-key">Contact</span>
               <a className="about-val about-link" href="mailto:ktulu.analog@gmail.com">ktulu.analog@gmail.com ↗</a>

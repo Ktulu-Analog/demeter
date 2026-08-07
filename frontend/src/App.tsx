@@ -25,9 +25,11 @@ import { Message } from './components/Message';
 import type { ChatMessage, Attachment } from './components/Message';
 import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { SettingsModal, McpStatusPanel, AboutModal, McpTooltipButton, type McpEntry } from './components/Modals';
+import { McpPanel } from './components/McpPanel';
 import type { Settings } from './components/Modals';
 import { PromptsEditorModal } from './components/PromptsEditorModal';
 import { IngestionModal } from './components/IngestionModal';
+import { AudioTranscriptionModal } from './components/AudioTranscriptionModal';
 import { CompareModeView } from './components/CompareMode';
 import './CompareMode.css';
 import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
@@ -129,6 +131,8 @@ function AppInner() {
         qdrant_url:               s.qdrant_url?.trim() || null,
         user_email:               email ?? currentUser?.email ?? null,
         qdrant_collection_tokens: collectionTokens,
+        mcp_dir:                  s.mcp_dir?.trim() || null,
+        mcp_env:                  s.mcp_stdio_config || {},
       }
     })?.catch(console.error);
   };
@@ -137,10 +141,11 @@ function AppInner() {
     applyFontPrefs(s.font_family, s.font_size);
     setSettings(s);
     localStorage.setItem('demeter_settings', JSON.stringify(s));
-    initCredentials(s);
+    return initCredentials(s);
   };
 
   const [showSettings,      setShowSettings]      = useState(!settings.endpoint);
+  const [showMcpPanel,      setShowMcpPanel]      = useState(false);
 
   // Initialise AppState Rust dès le démarrage via IPC Tauri (pas HTTP).
   // On attend la résolution de la Promise avant d'autoriser les fetches HTTP
@@ -155,6 +160,7 @@ function AppInner() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [showMcpStatus,     setShowMcpStatus]      = useState(false);
   const [showIngestion,     setShowIngestion]      = useState(false);
+  const [showAudioModal,    setShowAudioModal]      = useState(false);
   const [showPromptsEditor, setShowPromptsEditor]  = useState(false);
   const [showAbout,         setShowAbout]          = useState(false);
   const [showCompare,       setShowCompare]        = useState(false);
@@ -354,8 +360,10 @@ function AppInner() {
       const id = e.detail;
       if (id === 'new_conv')       newConversation();
       if (id === 'settings')       setShowSettings(true);
+      if (id === 'mcp_panel')      setShowMcpPanel(true);
       if (id === 'spaces_editor')  setShowPromptsEditor(true);
       if (id === 'rag')            setShowIngestion(true);
+      if (id === 'audio_transcription') setShowAudioModal(true);
       if (id === 'about')          setShowAbout(true);
       if (id === 'toggle_sidebar') setSidebarOpen(v => !v);
       if (id === 'compare')        setShowCompare(true);
@@ -726,8 +734,23 @@ function AppInner() {
   return (
     <div className="layout">
       {showSettings      && <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettings(false)} />}
+      {showMcpPanel      && <McpPanel settings={settings} onSave={saveSettings} onClose={() => setShowMcpPanel(false)} />}
       {showMcpStatus     && <McpStatusPanel servers={settings.mcp_servers || []} webSearchMcp={settings.web_search_mcp ? { url: settings.web_search_mcp, alias: settings.web_search_mcp_alias } : undefined} webSearchActive={webSearch} onClose={() => setShowMcpStatus(false)} />}
       {showIngestion     && <IngestionModal settings={settings} spaces={spaces} onClose={() => { setShowIngestion(false); refreshCollectionsAndAssignments(); }} onSave={(assignments) => { setSpaceAssignments(assignments); refreshCollectionsAndAssignments(); }} />}
+      {showAudioModal    && (
+        <AudioTranscriptionModal
+          settings={settings}
+          onClose={() => setShowAudioModal(false)}
+          onInsert={(text) => {
+            if (inputRef.current) {
+              const current = inputRef.current.value;
+              inputRef.current.value = current ? `${current}\n\n${text}` : text;
+              autoResize();
+              inputRef.current.focus();
+            }
+          }}
+        />
+      )}
       {showPromptsEditor && <PromptsEditorModal onClose={() => setShowPromptsEditor(false)} onSpacesUpdated={reloadSpaces} />}
       {showAbout         && <AboutModal onClose={() => setShowAbout(false)} />}
       {showCompare       && (
@@ -836,6 +859,16 @@ function AppInner() {
               >
                 <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M1 2h6v12H1V2zm8 0h6v12H9V2zM2 3v10h4V3H2zm8 0v10h4V3h-4z"/></svg>
                 Comparer
+              </button>
+            )}
+            {configured && (
+              <button
+                className="artifacts-toggle-btn"
+                onClick={() => setShowMcpPanel(true)}
+                title="Configurer les serveurs MCP"
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor"><path d="M6 1a1 1 0 00-1 1v2H3.5A1.5 1.5 0 002 5.5v1A1.5 1.5 0 003.5 8H5v2H3.5A1.5 1.5 0 002 11.5v1A1.5 1.5 0 003.5 14H5v1a1 1 0 102 0v-1h2v1a1 1 0 102 0v-1h1.5a1.5 1.5 0 001.5-1.5v-1a1.5 1.5 0 00-1.5-1.5H11V8h1.5A1.5 1.5 0 0014 6.5v-1A1.5 1.5 0 0012.5 4H11V2a1 1 0 10-2 0v2H7V2a1 1 0 00-1-1z"/></svg>
+                MCP
               </button>
             )}
             {currentUser && <span className="badge badge-green" style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-secondary)' }}>👤 {currentUser.name || currentUser.email}</span>}
@@ -951,6 +984,9 @@ function AppInner() {
                 <div className="input-toolbar">
                   <button className={`attach-btn ${extracting ? 'attach-btn--loading' : ''} ${attachments.length ? 'attach-btn--active' : ''}`} onClick={() => fileInputRef.current?.click()} disabled={loading || extracting}>
                     {extracting ? <span className="spinner-sm" /> : <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path fillRule="evenodd" d="M8 4a3 3 0 00-3 3v4a5 5 0 0010 0V7a1 1 0 112 0v4a7 7 0 11-14 0V7a5 5 0 0110 0v4a3 3 0 11-6 0V7a1 1 0 012 0v4a1 1 0 102 0V7a3 3 0 00-3-3z" clipRule="evenodd"/></svg>}
+                  </button>
+                  <button className="attach-btn" onClick={() => setShowAudioModal(true)} disabled={loading || extracting} title="Transcrire un fichier audio (avec identification des locuteurs)">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16"><path d="M10 2a3 3 0 00-3 3v5a3 3 0 006 0V5a3 3 0 00-3-3z"/><path d="M5.5 9.5a.75.75 0 00-1.5 0 6 6 0 005.25 5.955V17H7a.75.75 0 000 1.5h6a.75.75 0 000-1.5h-2.25v-1.545A6 6 0 0016 9.5a.75.75 0 00-1.5 0 4.5 4.5 0 01-9 0z"/></svg>
                   </button>
                   <McpTooltipButton
                     className={`websearch-pill ${webSearch ? 'websearch-pill--on' : ''}`}

@@ -21,6 +21,8 @@ mod config;
 mod db;
 mod extract;
 mod mcp;
+mod mcp_pack;
+mod mcp_stdio;
 mod models;
 mod rag;
 mod spaces;
@@ -42,6 +44,14 @@ struct CredentialsPayload {
     /// Tokens JWT additionnels par collection (utilisateurs non-admin multi-collections)
     #[serde(default)]
     qdrant_collection_tokens: Vec<crate::api::CollectionToken>,
+    /// Dossier choisi par l'utilisateur dans le panel MCP pour ses serveurs
+    /// MCP stdio (mcp-*). `None`/absent = pas encore configuré.
+    #[serde(default)]
+    mcp_dir: Option<String>,
+    /// Valeurs de configuration saisies dans le panel MCP, par serveur
+    /// (id du manifest) puis par clé de paramètre (ex : "GRIST_API_KEY").
+    #[serde(default)]
+    mcp_env: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
 #[tauri::command]
@@ -60,21 +70,32 @@ async fn init_credentials(
         .into_iter()
         .filter(|ct| !ct.token.trim().is_empty() && !ct.collection.trim().is_empty())
         .collect();
+    drop(creds);
+
+    // ── MCP stdio : dossier + paramètres de configuration ──────────────────
+    let mcp_dir = payload
+        .mcp_dir
+        .filter(|p| !p.trim().is_empty())
+        .map(std::path::PathBuf::from);
+    state.mcp_stdio.set_dir(mcp_dir).await;
+    *state.mcp_env.write().await = payload.mcp_env;
 
     // ── TRACE init_credentials ───────────────────────────────────────────────
+    let creds = state.credentials.read().await;
     let is_jwt_key = creds
         .qdrant_api_key
         .as_deref()
         .map(|k| k.starts_with("eyJ"))
         .unwrap_or(false);
     tracing::info!(
-        "[TRACE init_credentials] user_email={:?} qdrant_key_type={} key_prefix={:?}          qdrant_url={:?} nb_collection_tokens={} collections={:?}",
+        "[TRACE init_credentials] user_email={:?} qdrant_key_type={} key_prefix={:?}          qdrant_url={:?} nb_collection_tokens={} collections={:?} mcp_dir={:?}",
         creds.user_email,
         if is_jwt_key { "JWT" } else { "raw_key_or_none" },
         creds.qdrant_api_key.as_deref().map(|k| &k[..k.len().min(12)]),
         creds.qdrant_url,
         creds.qdrant_collection_tokens.len(),
         creds.qdrant_collection_tokens.iter().map(|ct| ct.collection.clone()).collect::<Vec<_>>(),
+        state.mcp_stdio.dir().await,
     );
 
     Ok(())
@@ -156,9 +177,24 @@ pub fn run() {
                             &MenuItem::with_id(
                                 handle,
                                 "rag",
-                                "Ingestion RAG…",
+                                "Collections RAG…",
                                 true,
                                 Some("CmdOrCtrl+R"),
+                            )?,
+                            &MenuItem::with_id(
+                                handle,
+                                "audio_transcription",
+                                "Transcription audio…",
+                                true,
+                                Some("CmdOrCtrl+T"),
+                            )?,
+                            &PredefinedMenuItem::separator(handle)?,
+                            &MenuItem::with_id(
+                                handle,
+                                "mcp_panel",
+                                "Serveurs MCP…",
+                                true,
+                                Some("CmdOrCtrl+M"),
                             )?,
                         ],
                     )?,
@@ -239,9 +275,28 @@ pub fn run() {
 
             let db_path = app_data_dir.join("conversations.db");
 
+            // ── MCP stdio ─────────────────────────────────────────────────────
+            // Le dossier scanné pour les serveurs MCP stdio est choisi par
+            // l'utilisateur depuis le panel MCP dédié (pas de dossier imposé
+            // par Demeter) — il est transmis au backend via la commande Tauri
+            // `init_credentials`, comme les autres préférences. On résout ici
+            // uniquement le dossier des MCP "officiels" embarqués dans les
+            // resources de l'app, utilisé par le bouton "Installer les MCP
+            // officiels" du panel pour les copier dans le dossier choisi.
+            let official_mcp_dir = app
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|d| d.join("mcp-servers"))
+                .filter(|d| d.exists());
+
             info!("Data dir: {}", app_data_dir.display());
             info!("DB path: {}", db_path.display());
             info!("Prompts: {}", prompts_path.display());
+            match &official_mcp_dir {
+                Some(d) => info!("MCP officiels embarqués: {}", d.display()),
+                None => info!("Aucun MCP officiel embarqué (build de dev sans resources)."),
+            }
 
             let db_path_clone = db_path.clone();
             let prompts_path_clone = prompts_path.clone();
@@ -252,9 +307,22 @@ pub fn run() {
                     .expect("Failed to open database")
             });
 
-            let (router, app_state) = api::build_router(db, prompts_path_clone);
+            let (router, app_state) = api::build_router(db, prompts_path_clone, official_mcp_dir);
 
-            // Partager AppState avec les commandes Tauri
+            // Arrêt propre des process MCP stdio quand la fenêtre se ferme.
+            if let Some(window) = app.get_webview_window("main") {
+                let mcp_state_for_exit = app_state.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { .. } = event {
+                        let mcp_state = mcp_state_for_exit.clone();
+                        tauri::async_runtime::block_on(async move {
+                            mcp_state.mcp_stdio.stop_all().await;
+                        });
+                    }
+                });
+            }
+
+            // Partager AppState avec les commandes Tauri (init_credentials...)
             handle.manage(app_state);
 
             tauri::async_runtime::spawn(async move {

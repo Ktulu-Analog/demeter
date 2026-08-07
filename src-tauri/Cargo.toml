@@ -1,6 +1,6 @@
 [package]
 name = "demeter"
-version = "2.3.1"
+version = "2.4.0"
 description = "Demeter – Assistant RH"
 authors = ["Pierre Couget <ktulu.analog@gmail.com>"]
 edition = "2021"
@@ -63,6 +63,7 @@ jsonwebtoken = { version = "10", default-features = false, features = ["rust_cry
 
 pdf-extract = "0.10"
 zip = "2"
+sha2 = "0.10"
 quick-xml = { version = "0.36", features = ["serialize"] }
 encoding_rs = "0.8"
 urlencoding = "2"

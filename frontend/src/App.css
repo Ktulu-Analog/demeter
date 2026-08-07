@@ -1394,29 +1394,19 @@
 
 .field-textarea {
   resize: vertical;
-  min-height: 90px;
+  min-height: 100px;
   font-family: var(--font-mono, monospace);
   font-size: 12px;
   line-height: 1.6;
   box-sizing: border-box;
 }
 
-.field-textarea {
-  resize: vertical;
-  min-height: 90px;
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
-  line-height: 1.6;
-  box-sizing: border-box;
-}
-
-.field-textarea {
-  resize: vertical;
-  min-height: 90px;
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
-  line-height: 1.6;
-  box-sizing: border-box;
+/* Prompts de résumé audio : colonne élargie → textarea plus haute pour une
+   édition confortable des instructions envoyées au LLM. */
+.mcp-card__body .field-textarea {
+  min-height: 150px;
+  font-size: 12.5px;
+  line-height: 1.65;
 }
 
 .field-hint {
@@ -4093,7 +4083,7 @@
 /* ── Settings Modal — 2 colonnes ─────────────────────────────────────────── */
 
 .settings-modal {
-  width: 920px;
+  width: 1180px;
   max-width: 97vw;
   max-height: 94vh;
   display: flex;
@@ -4102,7 +4092,7 @@
 
 .settings-body {
   display: grid;
-  grid-template-columns: 1fr 1px 1fr 1px 1fr;
+  grid-template-columns: 1fr 1px 1fr 1px 1.5fr;
   gap: 0;
   padding: 0 !important;
   overflow-y: auto;
@@ -4349,6 +4339,16 @@
   padding-right: 2px;
 }
 
+/* Dans le panel MCP dédié, la modale entière scrolle déjà (.mcp-panel-body) :
+   pas de scroll interne ici, sous peine de couper les cartes en deux et de
+   donner une impression de chevauchement. */
+.mcp-cards-list--panel {
+  max-height: none;
+  overflow: visible;
+  padding-right: 0;
+  gap: 8px;
+}
+
 .mcp-empty-state {
   display: flex;
   align-items: center;
@@ -4418,6 +4418,45 @@
 }
 
 .mcp-card__alias-input::placeholder { color: var(--text-tertiary); font-weight: 400; }
+
+/* ── Sous-titre de sous-section (MCP locaux / distants) ──────────────────── */
+.settings-section-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary, #888);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ── MCP stdio : carte à cocher plutôt qu'à saisir ───────────────────────── */
+.mcp-card--toggle {
+  cursor: pointer;
+}
+
+.mcp-card--toggle .mcp-card__top input[type="checkbox"] {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.mcp-card--enabled {
+  border-color: var(--green-mid);
+  background: rgba(52, 199, 89, .06);
+}
+
+.mcp-card--enabled .mcp-card__accent {
+  opacity: 1;
+}
+
+.mcp-card--disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+.mcp-card--disabled .mcp-card__accent {
+  background: var(--text-tertiary);
+}
 .mcp-card__alias-input:focus { color: var(--green-dark); }
 
 .mcp-card__url {
@@ -4504,6 +4543,91 @@
 }
 
 .mcp-add-btn:hover { opacity: .85; }
+
+.mcp-add-btn--ghost {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+}
+.mcp-add-btn--ghost:hover { opacity: 1; border-color: var(--green-mid); color: var(--green-dark); }
+.mcp-add-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── Panel MCP dédié ──────────────────────────────────────────────────────── */
+
+.mcp-panel-modal { max-width: 820px; width: 90vw; }
+
+.mcp-panel-body {
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.mcp-dir-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+
+.mcp-dir-path {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  color: var(--text-primary);
+  background: rgba(255,255,255,.03);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 7px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-dir-path--empty { color: var(--text-tertiary); font-style: italic; font-family: var(--font-body); }
+
+.mcp-install-msg { margin-top: 6px; }
+.mcp-pack-uptodate { margin-top: 6px; }
+
+.mcp-configure-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--green-dark);
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: 5px;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+.mcp-configure-btn:hover { border-color: var(--green-mid); }
+
+.mcp-config-warning {
+  color: #d97706;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.mcp-config-form {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border-light);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mcp-required-star { color: #dc2626; }
+
+.mcp-param-help {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+}
 
 /* ── MCP Status Panel ─────────────────────────────────────────────────────── */
 
@@ -4860,4 +4984,232 @@ button.mcp-pill-header:hover {
   font-size: 10px;
   font-weight: 400;
   white-space: nowrap;
+}
+
+/* ── Transcription audio (diarization) ────────────────────────────────────── */
+
+.modal.audio-transcription-modal {
+  width: 1040px;
+  max-width: 96vw;
+  max-height: 92vh;
+}
+
+.audio-transcription-modal .modal-body { max-height: 78vh; overflow-y: auto; }
+
+/* Deux colonnes dès que le transcript + le résumé sont affichés : le transcript
+   respire à gauche, le résumé reste visible à droite sans scroller la page entière. */
+.audio-result-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .audio-result-columns { grid-template-columns: 1fr; }
+}
+
+.audio-drop-zone {
+  border: 1.5px dashed var(--border);
+  border-radius: 10px;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  background: var(--bg-secondary);
+}
+.audio-drop-zone:hover        { border-color: var(--green-dark); }
+.audio-drop-zone--over        { border-color: var(--green-dark); background: var(--green-light); }
+.audio-drop-zone--filled      { cursor: default; padding: 10px 14px; justify-content: flex-start; }
+
+.audio-drop-hint {
+  color: var(--text-tertiary);
+  font-size: 13px;
+  text-align: center;
+}
+
+.audio-file-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.audio-file-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+
+.audio-options-row {
+  display: grid;
+  grid-template-columns: 2fr 1fr auto;
+  gap: 14px;
+  align-items: end;
+}
+@media (max-width: 640px) {
+  .audio-options-row { grid-template-columns: 1fr; }
+}
+
+.audio-diarization-toggle { display: flex; flex-direction: column; gap: 6px; }
+
+.toggle-switch {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  border: none;
+  background: var(--border);
+  cursor: pointer;
+  padding: 0;
+  transition: background .15s;
+  flex-shrink: 0;
+}
+.toggle-switch--on { background: var(--green-dark); }
+.toggle-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .15s;
+  box-shadow: 0 1px 2px rgba(0,0,0,.25);
+}
+.toggle-switch--on .toggle-switch-knob { transform: translateX(16px); }
+
+.audio-result-section { margin-top: 4px; }
+
+.audio-transcript-panel {
+  max-height: 52vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audio-segment-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.audio-segment-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  min-width: 78px;
+}
+
+.audio-segment-speaker {
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.audio-segment-speaker-input {
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  border: none;
+  outline: 2px solid rgba(255, 255, 255, 0.6);
+  outline-offset: 1px;
+  min-width: 70px;
+  max-width: 160px;
+  font-family: inherit;
+}
+
+.audio-segment-text { color: var(--text-primary); flex: 1; }
+
+.audio-transcript-plain {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  margin: 0;
+}
+
+.audio-result-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.audio-summary-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.audio-summary-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.audio-summary-select {
+  flex: 1;
+  min-width: 0;
+}
+
+.audio-summary-empty {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+  margin: 0;
+}
+
+.audio-summary-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.audio-summary-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-light);
+  flex-shrink: 0;
+}
+
+.audio-summary-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.audio-summary-result-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.audio-summary-insert-btn {
+  align-self: flex-start;
+  padding: 5px 10px;
+  font-size: 12px;
 }

@@ -23,9 +23,10 @@ via n'importe quelle API compatible OpenAI (Albert API, OpenAI, Mistral, Ollama�
 |---|---|
 | 💬 **Chat IA multi-espaces** | Demeter RH, Recrutement, Congés, Fiches de paie, Formations |
 | 📚 **RAG (Qdrant)** | Ingestion PDF/DOCX, recherche sémantique + reranking ; stockage vectoriel via **Qdrant** local ou distant |
-| 🔌 **MCP** | Connexion à des serveurs MCP externes (HTTP Streamable 2025-03-26) |
+| 🔌 **MCP** | Serveurs **stdio** (sous-processus gérés par Demeter, pack officiel auto-installé) et **HTTP Streamable** (2025-03-26) |
 | 🌐 **Recherche web** | Serveur MCP dédié — activé à la demande via le bouton « Web » ; alias et statut visibles en info-bulle |
-| 📄 **Génération Word** | Export `.docx` depuis le chat en un clic |
+| 🎙️ **Transcription audio** | Séparation des locuteurs (diarization), fichiers longs découpés automatiquement, synthèse configurable |
+| 📄 **Génération Word** | Export `.docx` depuis le chat, les transcriptions et les synthèses en un clic |
 | 📊 **Graphiques ECharts** | Blocs ` ```echarts ` rendus interactivement |
 | 🖼️ **Graphiques SVG natifs** | Blocs ` ```svg ` rendus inline avec zoom, copie et téléchargement |
 | 📐 **Diagrammes Mermaid** | Flowcharts, séquences, Gantt… |
@@ -46,11 +47,12 @@ demeter/
 │       ├── components/
 │       │   ├── MarkdownComponents.tsx   ← Rendu Markdown + ECharts + Mermaid + SVG
 │       │   ├── IngestionModal.tsx       ← Interface RAG (Qdrant)
+│       │   ├── AudioTranscriptionModal.tsx ← Transcription audio (diarization, synthèse, export Word)
 │       │   ├── ArtifactsPanel.tsx       ← Panneau Word/artefacts
 │       │   ├── PromptsEditorModal.tsx   ← Éditeur d'espaces & prompts
 │       │   └── Message.tsx             ← Rendu d'un message
 │       ├── hooks/              ← Hooks React (streaming, MCP…)
-│       └── utils/              ← docx, text, mermaid-sanitizer, artifacts
+│       └── utils/              ← docx, text, mermaid-sanitizer, artifacts, audioChunking, speakerReconciliation
 │
 └── src-tauri/                  ← Backend Rust + config Tauri
     └── src/
@@ -59,6 +61,8 @@ demeter/
         ├── models.rs           ← Types Serde (Chat, Conversation, Chunk…)
         ├── rag.rs              ← Pipeline RAG Qdrant (retrieve → rerank → inject)
         ├── mcp.rs              ← Client MCP HTTP Streamable
+        ├── mcp_stdio.rs        ← Client MCP stdio (serveurs lancés en sous-processus)
+        ├── mcp_pack.rs         ← Téléchargement/installation du pack MCP officiel
         ├── extract.rs          ← Extraction texte PDF (lopdf) et DOCX (zip+XML)
         ├── spaces.rs           ← Lecture/écriture prompts.yml
         └── lib.rs              ← Setup Tauri + démarrage serveur HTTP
@@ -140,12 +144,22 @@ cd frontend && npm install && cd ..
 cargo tauri dev
 ```
 
+`cargo tauri dev` récupère automatiquement les MCP officiels au premier lancement (via `beforeDevCommand` → `npm run predev`, voir § MCP) — inutile de lancer `fetch-mcp-pack.sh` à la main. Les lancements suivants sont instantanés (rien n'est retéléchargé si la version cible est déjà présente). Hors-ligne, le démarrage se poursuit quand même avec un dossier `mcp-servers/` vide ou déjà présent — relancez `./scripts/fetch-mcp-pack.sh` dès que la connexion revient.
+
 L'interface s'ouvre automatiquement.
 Le serveur Rust écoute sur `http://localhost:45678`.
 
 ### Build production
 
 ```bash
+npm run tauri:build   # inclut la récupération STRICTE du pack MCP + build frontend + tauri build
+```
+
+Contrairement au mode dev, la récupération du pack ici n'a pas de filet de sécurité hors-ligne : si le téléchargement ou la vérification du checksum échoue, le build s'arrête — on ne veut jamais livrer un installeur avec un `mcp-servers/` vide ou périmé.
+
+Équivalent manuel :
+```bash
+./scripts/fetch-mcp-pack.sh
 cd frontend && npm install && npm run build && cd ..
 cargo tauri build
 ```
@@ -214,7 +228,7 @@ Les espaces sont configurés dans `src-tauri/prompts.yml` (embarqué dans le bin
 ## RAG — Ingestion de documents
 
 1. Lancez **Qdrant** (`http://localhost:6333` par défaut)
-2. Ouvrez **Ingestion RAG** (⌘R / Ctrl+R)
+2. Ouvrez **Collections RAG** (⌘R / Ctrl+R)
 3. Créez ou sélectionnez une collection Qdrant
 4. Déposez vos fichiers PDF, DOCX, TXT ou Markdown
 5. Activez le RAG dans une conversation via le bouton 📚
@@ -239,13 +253,37 @@ Demeter supporte plusieurs formats de visualisation directement dans le chat :
 
 ---
 
+## Transcription audio
+
+Demeter intègre une modale de transcription audio (API Albert `/v1/audio/transcriptions`) :
+
+- **Séparation des locuteurs (diarization)** — chaque segment est attribué à un locuteur, avec fusion automatique des tours de parole consécutifs d'un même locuteur
+- **Fichiers longs** — découpage automatique en chunks avant envoi, puis réconciliation des locuteurs entre les segments pour reconstituer un transcript cohérent
+- **Synthèses configurables** — génération de résumés à partir de prompts personnalisables (`audio_summary_prompts`)
+- **Export Word** — le transcript complet (locuteurs en gras) et chaque synthèse peuvent être exportés en `.docx` en un clic
+
+---
+
 ## MCP — Outils externes
 
-Demeter supporte le [Model Context Protocol](https://modelcontextprotocol.io) en transport **HTTP Streamable** (spec 2025-03-26), compatible avec `mcp.data.gouv.fr` et tout serveur FastMCP stateless.
+Demeter supporte le [Model Context Protocol](https://modelcontextprotocol.io) sous deux transports :
 
-Ajoutez des serveurs MCP dans les paramètres. Chaque serveur peut recevoir un **alias** affiché dans l'interface. Les outils disponibles sont découverts automatiquement et les statuts de connexion sont visibles en info-bulle au survol des boutons MCP et Web.
+- **stdio** — des serveurs MCP lancés et gérés automatiquement par Demeter comme sous-processus. C'est le mode recommandé : rien à héberger, configuration via le panel **Serveurs MCP** (`Ctrl+M` / `Cmd+M`).
+- **HTTP Streamable** (spec 2025-03-26) — pour des serveurs déjà hébergés ailleurs (compatible `mcp.data.gouv.fr` et tout serveur FastMCP stateless), ajoutés par URL depuis le même panel.
+
+Chaque serveur peut recevoir un **alias** affiché dans l'interface. Les outils disponibles sont découverts automatiquement et les statuts de connexion sont visibles en info-bulle au survol des boutons MCP et Web.
 
 Le bouton **Web** active un serveur MCP dédié à la recherche web (configurable séparément) ; il n'est inclus dans les appels que lorsqu'il est allumé.
+
+### MCP officiels (stdio)
+
+Judilibre, Grist, Légifrance et Système de fichiers sont fournis prêts à l'emploi, mais **pas versionnés dans ce dépôt** : leurs sources et binaires précompilés vivent dans [`demeter-mcp-pack`](https://github.com/Ktulu-Analog/demeter-mcp-pack), un dépôt dédié — voir son README pour le détail du cycle de release (cross-compilation 4 plateformes, checksums, releases GitHub).
+
+- `MCP_PACK_VERSION` (racine de ce dépôt) fixe la version du pack embarquée dans les builds Demeter.
+- `./scripts/fetch-mcp-pack.sh` télécharge cette version, vérifie son checksum SHA-256, et la déballe dans `src-tauri/mcp-servers/` avant `tauri build` — c'est ce dossier qui est ensuite embarqué comme *resource* Tauri.
+- À l'exécution, le bouton **Vérifier les mises à jour** du panel MCP interroge la dernière release publiée sur `demeter-mcp-pack` et propose une mise à jour ponctuelle (téléchargement + vérification + installation non-destructive), sans attendre une nouvelle version de Demeter.
+
+Voir aussi le [guide utilisateur complet des MCP](docs/MCP-Guide-Demeter.md) pour l'installation, la configuration et l'usage au quotidien.
 
 ---
 

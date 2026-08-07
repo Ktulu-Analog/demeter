@@ -30,6 +30,32 @@ export const MIME_TO_EXT: Record<string, string> = {
   'image/webp': 'webp',
 };
 
+export interface AudioSummaryPrompt {
+  id: string;
+  label: string;
+  prompt: string;
+}
+
+// Prompts par défaut proposés pour le résumé automatique des transcriptions audio.
+// Modifiables par l'utilisateur depuis Configuration → Résumé audio (persistés dans Settings.audio_summary_prompts).
+export const DEFAULT_AUDIO_SUMMARY_PROMPTS: AudioSummaryPrompt[] = [
+  {
+    id: 'synthese',
+    label: 'Synthèse',
+    prompt: "Fais une synthèse courte et claire de cette transcription (5 à 10 lignes maximum), en français, en reprenant les idées principales évoquées par chaque intervenant.",
+  },
+  {
+    id: 'analyse',
+    label: 'Analyse',
+    prompt: "Analyse cette transcription en français : identifie les sujets abordés, les positions ou arguments de chaque intervenant, les points de désaccord éventuels, puis conclus par une évaluation globale des échanges.",
+  },
+  {
+    id: 'synthese-detaillee',
+    label: 'Synthèse détaillée',
+    prompt: "Rédige une synthèse détaillée et structurée de cette transcription, en français, avec les sections suivantes : \n1. Résumé général\n2. Points clés (liste à puces)\n3. Décisions prises\n4. Actions à mener (avec le responsable si mentionné)\n5. Points en suspens / questions ouvertes.",
+  },
+];
+
 export interface DotOption {
   value: string;
   label: string;

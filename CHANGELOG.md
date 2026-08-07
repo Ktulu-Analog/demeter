@@ -7,6 +7,31 @@ et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 
 ---
 
+## [2.4.0] — 2026-08-06
+
+### Ajouté
+
+- **Transcription audio avec séparation des locuteurs** — nouvelle modale de transcription (API Albert `/v1/audio/transcriptions`) avec découpage automatique des fichiers longs (`audioChunking`), réconciliation des locuteurs entre segments (`speakerReconciliation`) et fusion des tours de parole consécutifs d'un même locuteur
+- **Synthèse au format Word** — export `.docx` du transcript complet (locuteurs en gras) ainsi que des synthèses générées, via des prompts de résumé configurables (`audio_summary_prompts`)
+- **MCP stdio** — Demeter peut désormais lancer et gérer des serveurs MCP en sous-processus (transport stdio), en complément du transport HTTP Streamable existant ; configuration via le panel **Serveurs MCP** (`Ctrl+M` / `Cmd+M`)
+- **Installation automatique du pack MCP officiel** — récupération, vérification (checksum SHA-256) et déballage automatiques du pack [`demeter-mcp-pack`](https://github.com/Ktulu-Analog/demeter-mcp-pack) (Judilibre, Grist, Légifrance, Système de fichiers) via `scripts/fetch-mcp-pack.sh`, la version embarquée étant fixée par `MCP_PACK_VERSION` ; un bouton **Vérifier les mises à jour** dans le panel MCP permet une mise à jour ponctuelle du pack sans attendre une nouvelle version de Demeter
+
+### Modifié
+
+- **Menu « Ingestion RAG… » renommé en « Collections RAG… »** pour rester cohérent avec le titre déjà utilisé dans la modale elle-même
+
+### Sécurité
+
+- **ECharts 5.5.1 → 6.1.0** — corrige une vulnérabilité XSS modérée ([GHSA-fgmj-fm8m-jvvx](https://github.com/advisories/GHSA-fgmj-fm8m-jvvx)) ; changement majeur mais sans impact sur l'usage qu'en fait Demeter (`echarts.init` + `EChartsOption`), le thème par défaut évolue légèrement (position de la légende, palette) — voir le [guide de migration v5→v6](https://echarts.apache.org/handbook/en/basics/release-note/v6-upgrade-guide/) si besoin de restaurer l'ancien rendu
+
+### Corrigé
+
+- **Formatage `cargo fmt`** sur `api.rs`, `mcp_pack.rs` et `mcp_stdio.rs`
+- **Code mort** — suppression de `mcp::collect_all_tools` (HTTP uniquement), devenue obsolète et non utilisée depuis son remplacement par `collect_all_tools_unified` (HTTP + stdio) dans `api.rs`
+- **Mise à jour du pack MCP officiel échouait** (`Aucune entrée pour '<archive>.zip' dans checksums.txt`) — `verify_checksum` compare désormais les noms de fichiers en ignorant un éventuel préfixe `./`, produit par certaines versions de `sha256sum ./*.zip` côté [`demeter-mcp-pack`](https://github.com/Ktulu-Analog/demeter-mcp-pack)
+
+---
+
 ## [2.3.1] — 2026-06-28
 
 ### Ajouté

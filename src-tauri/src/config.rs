@@ -180,3 +180,9 @@ pub fn timeout_image_proxy() -> Duration {
 pub fn timeout_models() -> Duration {
     Duration::from_secs(env_u64("TIMEOUT_MODELS_SECS", 8))
 }
+
+/// Timeout pour la transcription audio (avec diarization, potentiellement longue)
+/// (défaut : 600s / 10 minutes).
+pub fn timeout_audio_transcription() -> Duration {
+    Duration::from_secs(env_u64("TIMEOUT_AUDIO_TRANSCRIPTION_SECS", 600))
+}

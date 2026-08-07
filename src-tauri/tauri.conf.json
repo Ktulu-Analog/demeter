@@ -1,12 +1,12 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Demeter",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "identifier": "fr.demeter.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run predev && npm run dev",
     "devUrl": "http://localhost:3010",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run fetch-mcp-pack && npm run build",
     "frontendDist": "../frontend/build"
   },
   "app": {
@@ -33,6 +33,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "mcp-servers/**/*"
     ],
     "publisher": "Pierre Couget",
     "copyright": "© 2026 Pierre Couget",

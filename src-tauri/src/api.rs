@@ -11,6 +11,7 @@
 // licence AGPL-3.0 publiée par la Free Software Foundation.
 // ============================================================================
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -286,16 +287,32 @@ pub struct AppState {
     pub db: Database,
     pub prompts_path: PathBuf,
     pub credentials: Arc<RwLock<Credentials>>,
+    pub mcp_stdio: crate::mcp_stdio::StdioManager,
+    /// Valeurs de configuration saisies par l'utilisateur dans le panel MCP,
+    /// par serveur puis par clé (ex : mcp_env["mcp-grist"]["GRIST_API_KEY"]).
+    /// Synchronisées depuis le frontend via la commande Tauri `init_credentials`.
+    pub mcp_env: Arc<RwLock<HashMap<String, HashMap<String, String>>>>,
+    /// Dossier des MCP officiels embarqués avec l'application (resources
+    /// Tauri), utilisé par le bouton "Installer les MCP officiels" du panel.
+    /// `None` si l'app ne bundle aucun MCP (ex : build de dev sans resources).
+    pub official_mcp_dir: Option<PathBuf>,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-pub fn build_router(db: Database, prompts_path: PathBuf) -> (Router, Arc<AppState>) {
+pub fn build_router(
+    db: Database,
+    prompts_path: PathBuf,
+    official_mcp_dir: Option<PathBuf>,
+) -> (Router, Arc<AppState>) {
     let credentials = Arc::new(RwLock::new(Credentials::default()));
     let state = Arc::new(AppState {
         db,
         prompts_path,
         credentials,
+        mcp_stdio: crate::mcp_stdio::StdioManager::new(),
+        mcp_env: Arc::new(RwLock::new(HashMap::new())),
+        official_mcp_dir,
     });
 
     let cors = CorsLayer::new()
@@ -357,8 +374,21 @@ pub fn build_router(db: Database, prompts_path: PathBuf) -> (Router, Arc<AppStat
             "/api/ingestion/upload",
             post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
+        // Audio (transcription + diarization)
+        .route(
+            "/api/audio/transcriptions",
+            post(transcribe_audio).layer(DefaultBodyLimit::max(300 * 1024 * 1024)),
+        )
         // MCP
         .route("/api/mcp/tools", post(mcp_list_tools))
+        .route("/api/mcp/stdio/servers", get(mcp_stdio_list_servers))
+        .route("/api/mcp/stdio/stop", post(mcp_stdio_stop))
+        .route(
+            "/api/mcp/stdio/install-official",
+            post(mcp_stdio_install_official),
+        )
+        .route("/api/mcp/stdio/pack-update", get(mcp_pack_check_update))
+        .route("/api/mcp/stdio/pack-update", post(mcp_pack_apply_update))
         // Health
         .route("/api/image-proxy", get(image_proxy))
         .route("/health", get(health))
@@ -420,7 +450,19 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/ingestion/upload",
             post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
+        .route(
+            "/api/audio/transcriptions",
+            post(transcribe_audio).layer(DefaultBodyLimit::max(300 * 1024 * 1024)),
+        )
         .route("/api/mcp/tools", post(mcp_list_tools))
+        .route("/api/mcp/stdio/servers", get(mcp_stdio_list_servers))
+        .route("/api/mcp/stdio/stop", post(mcp_stdio_stop))
+        .route(
+            "/api/mcp/stdio/install-official",
+            post(mcp_stdio_install_official),
+        )
+        .route("/api/mcp/stdio/pack-update", get(mcp_pack_check_update))
+        .route("/api/mcp/stdio/pack-update", post(mcp_pack_apply_update))
         .route("/api/image-proxy", get(image_proxy))
         .route("/health", get(health))
 }
@@ -1013,7 +1055,7 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
     // on fait une boucle synchrone : LLM → tool_calls → résultats → LLM → ...
     // Le streaming est réservé à la réponse finale (sans tool_calls).
     let mcp_tools: Vec<Value> = if !req.mcp_servers.is_empty() {
-        let all = crate::mcp::collect_all_tools(&client, &req.mcp_servers).await;
+        let all = collect_all_tools_unified(&client, &state, &req.mcp_servers).await;
         all.iter()
             .map(|(server, tool)| crate::mcp::mcp_tool_to_openai(tool, server))
             .collect()
@@ -1182,8 +1224,15 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
                         .unwrap_or_else(|| req.mcp_servers[0].clone());
 
                     info!("MCP: appel tool {} sur {}", real_tool_name, server);
-                    let mcp_result =
-                        crate::mcp::call_tool(&client, &server, real_tool_name, &fn_args).await;
+                    let mcp_result = if let Some(id) = stdio_id(&server) {
+                        let env = mcp_env_for(&state, id).await;
+                        state
+                            .mcp_stdio
+                            .call_tool(id, real_tool_name, &fn_args, &env)
+                            .await
+                    } else {
+                        crate::mcp::call_tool(&client, &server, real_tool_name, &fn_args).await
+                    };
 
                     // Si le tool a retourné une image, l'émettre immédiatement via SSE
                     // avant de repasser au LLM (qui ne reçoit que le texte).
@@ -1325,13 +1374,77 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
 }
 
 // ── MCP ───────────────────────────────────────────────────────────────────────
+//
+// Un serveur MCP est référencé par une simple chaîne dans les préférences :
+//   - une URL ("https://...", "http://...")           → transport HTTP
+//   - "stdio:<id>" où <id> est l'identifiant du        → transport stdio
+//     manifest.json trouvé dans le répertoire dédié      (process local)
+//
+// Ce préfixe est la seule différence de traitement ; le reste de la boucle
+// agentique (formatage OpenAI des tools, exécution, extraction du résultat)
+// est identique pour les deux transports.
+
+const STDIO_PREFIX: &str = "stdio:";
+
+fn stdio_id(server: &str) -> Option<&str> {
+    server.strip_prefix(STDIO_PREFIX)
+}
+
+/// Récupère les variables d'environnement configurées par l'utilisateur pour
+/// un serveur MCP stdio donné (panel MCP → `init_credentials`).
+async fn mcp_env_for(state: &Arc<AppState>, id: &str) -> HashMap<String, String> {
+    state
+        .mcp_env
+        .read()
+        .await
+        .get(id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Collecte les tools de tous les serveurs MCP configurés, HTTP et stdio
+/// confondus, en parallèle.
+async fn collect_all_tools_unified(
+    client: &Client,
+    state: &Arc<AppState>,
+    servers: &[String],
+) -> Vec<(String, Value)> {
+    let futures: Vec<_> = servers
+        .iter()
+        .map(|server| {
+            let client = client.clone();
+            let server = server.clone();
+            let state = state.clone();
+            async move {
+                let tools = if let Some(id) = stdio_id(&server) {
+                    let env = mcp_env_for(&state, id).await;
+                    state.mcp_stdio.list_tools(id, &env).await.0
+                } else {
+                    crate::mcp::list_tools(&client, &server).await.0
+                };
+                tools
+                    .into_iter()
+                    .map(move |t| (server.clone(), t))
+                    .collect::<Vec<_>>()
+            }
+        })
+        .collect();
+    futures::future::join_all(futures)
+        .await
+        .into_iter()
+        .flatten()
+        .collect()
+}
 
 #[derive(serde::Deserialize)]
 struct McpListRequest {
     servers: Vec<String>,
 }
 
-async fn mcp_list_tools(Json(req): Json<McpListRequest>) -> Response {
+async fn mcp_list_tools(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<McpListRequest>,
+) -> Response {
     let client = Client::builder()
         .timeout(config::timeout_models())
         .use_rustls_tls()
@@ -1346,8 +1459,14 @@ async fn mcp_list_tools(Json(req): Json<McpListRequest>) -> Response {
         .map(|server| {
             let client = client.clone();
             let server = server.clone();
+            let state = state.clone();
             async move {
-                let (tools, ok) = crate::mcp::list_tools(&client, &server).await;
+                let (tools, ok) = if let Some(id) = stdio_id(&server) {
+                    let env = mcp_env_for(&state, id).await;
+                    state.mcp_stdio.list_tools(id, &env).await
+                } else {
+                    crate::mcp::list_tools(&client, &server).await
+                };
                 let count = tools.len();
                 json!({
                     "server": server,
@@ -1361,6 +1480,92 @@ async fn mcp_list_tools(Json(req): Json<McpListRequest>) -> Response {
 
     let result = futures::future::join_all(futures).await;
     Json(json!({ "servers": result })).into_response()
+}
+
+/// Liste les serveurs MCP stdio disponibles dans le répertoire actuellement
+/// configuré (officiels + ajoutés manuellement), avec leur disponibilité sur
+/// la plateforme courante et leurs paramètres de configuration attendus.
+/// Utilisé par le panel MCP dédié pour construire la liste et les
+/// formulaires de configuration.
+async fn mcp_stdio_list_servers(State(state): State<Arc<AppState>>) -> Response {
+    let servers = state.mcp_stdio.discover().await;
+    let dir = state.mcp_stdio.dir().await;
+    Json(json!({
+        "dir": dir,
+        "servers": servers,
+    }))
+    .into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct McpStdioStopRequest {
+    id: String,
+}
+
+/// Arrête un serveur MCP stdio en cours d'exécution (ex : désactivé ou
+/// reconfiguré dans le panel). Sans effet s'il n'était pas démarré.
+async fn mcp_stdio_stop(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<McpStdioStopRequest>,
+) -> Response {
+    state.mcp_stdio.stop(&req.id).await;
+    Json(json!({ "stopped": req.id })).into_response()
+}
+
+/// Copie les MCP officiels de Demeter dans le dossier actuellement configuré
+/// par l'utilisateur (sans écraser un MCP déjà présent). Échoue si aucun
+/// dossier n'est configuré.
+async fn mcp_stdio_install_official(State(state): State<Arc<AppState>>) -> Response {
+    let Some(resource_dir) = state.official_mcp_dir.clone() else {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Aucun MCP officiel embarqué dans cette build de Demeter." })),
+        )
+            .into_response();
+    };
+
+    match state.mcp_stdio.install_official(&resource_dir).await {
+        Ok(installed) => Json(json!({ "installed": installed })).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
+    }
+}
+
+/// Compare la version du pack MCP installée à la dernière release publiée
+/// sur GitHub. N'échoue jamais côté réseau : `latest` reste simplement à
+/// `null` si l'appel GitHub échoue (pas de connexion, dépôt privé, etc.).
+async fn mcp_pack_check_update(State(state): State<Arc<AppState>>) -> Response {
+    let installed = state.mcp_stdio.installed_pack_version().await;
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
+        .build()
+        .unwrap_or_default();
+    let status = crate::mcp_pack::check_update(&client, installed).await;
+    Json(status).into_response()
+}
+
+/// Télécharge, vérifie (SHA-256) et installe la dernière release du pack MCP
+/// dans le dossier actuellement configuré — sans jamais écraser la
+/// configuration déjà saisie par l'utilisateur pour un serveur existant.
+async fn mcp_pack_apply_update(State(state): State<Arc<AppState>>) -> Response {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
+        .build()
+        .unwrap_or_default();
+
+    match crate::mcp_pack::download_and_install(&client, &state.mcp_stdio).await {
+        Ok(installed) => Json(json!({ "installed": installed })).into_response(),
+        Err(e) => (
+            axum::http::StatusCode::BAD_REQUEST,
+            Json(json!({ "error": e })),
+        )
+            .into_response(),
+    }
 }
 
 // ── Generate title ────────────────────────────────────────────────────────────
@@ -2190,6 +2395,198 @@ async fn upload_document(State(state): State<Arc<AppState>>, mut multipart: Mult
         Err(e) => {
             error!("[upload] ✗ '{}' : {}", file_name, e);
             err(StatusCode::UNPROCESSABLE_ENTITY, e)
+        }
+    }
+}
+
+// ── Audio : transcription (avec diarization) ─────────────────────────────────
+// Proxifie vers POST {albert_base}/audio/transcriptions (multipart/form-data).
+// Le frontend envoie : file, model, response_format (diarized_json par défaut),
+// language (optionnel), temperature (optionnel).
+
+async fn transcribe_audio(
+    State(state): State<Arc<AppState>>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<EndpointParams>,
+    mut multipart: Multipart,
+) -> Response {
+    let creds = state.credentials.read().await.clone();
+    let bearer = bearer_from_header_or_state(&headers, &creds.bearer);
+    let base = albert_base(&params.endpoint);
+
+    info!("[audio] ── Nouvelle requête de transcription ──");
+
+    let mut file_name = String::new();
+    let mut file_bytes: Option<Bytes> = None;
+    let mut model = String::new();
+    let mut language: Option<String> = None;
+    let mut response_format = "diarized_json".to_string();
+    let mut temperature: Option<String> = None;
+    let mut prompt: Option<String> = None;
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        match name.as_str() {
+            "file" => {
+                file_name = field.file_name().unwrap_or("audio").to_string();
+                match field.bytes().await {
+                    Ok(b) => {
+                        info!("[audio] fichier '{}' ({} octets)", file_name, b.len());
+                        file_bytes = Some(b);
+                    }
+                    Err(e) => {
+                        return err(
+                            StatusCode::BAD_REQUEST,
+                            format!("Erreur lecture fichier : {e}"),
+                        );
+                    }
+                }
+            }
+            "model" => {
+                if let Ok(t) = field.text().await {
+                    model = t.trim().to_string();
+                }
+            }
+            "language" => {
+                if let Ok(t) = field.text().await {
+                    let t = t.trim().to_string();
+                    if !t.is_empty() {
+                        language = Some(t);
+                    }
+                }
+            }
+            "response_format" => {
+                if let Ok(t) = field.text().await {
+                    let t = t.trim().to_string();
+                    if !t.is_empty() {
+                        response_format = t;
+                    }
+                }
+            }
+            "temperature" => {
+                if let Ok(t) = field.text().await {
+                    let t = t.trim().to_string();
+                    if !t.is_empty() {
+                        temperature = Some(t);
+                    }
+                }
+            }
+            "prompt" => {
+                if let Ok(t) = field.text().await {
+                    let t = t.trim().to_string();
+                    if !t.is_empty() {
+                        prompt = Some(t);
+                    }
+                }
+            }
+            other => {
+                info!("[audio] champ ignoré : '{}'", other);
+                let _ = field.bytes().await;
+            }
+        }
+    }
+
+    let bytes = match file_bytes {
+        Some(b) => b,
+        None => return err(StatusCode::BAD_REQUEST, "Fichier audio manquant."),
+    };
+    if model.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "Modèle de transcription manquant.");
+    }
+
+    let ext = file_name.rsplit('.').next().unwrap_or("").to_lowercase();
+    let mime = match ext.as_str() {
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
+        "ogg" => "audio/ogg",
+        "webm" => "audio/webm",
+        _ => "application/octet-stream",
+    };
+
+    let file_part = match reqwest::multipart::Part::bytes(bytes.to_vec())
+        .file_name(file_name.clone())
+        .mime_str(mime)
+    {
+        Ok(p) => p,
+        Err(e) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!("Type de fichier audio invalide : {e}"),
+            );
+        }
+    };
+
+    let mut form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("model", model.clone())
+        .text("response_format", response_format.clone());
+
+    if let Some(lang) = language {
+        form = form.text("language", lang);
+    }
+    if let Some(temp) = temperature {
+        form = form.text("temperature", temp);
+    }
+    if let Some(p) = prompt {
+        form = form.text("prompt", p);
+    }
+
+    let client = Client::builder()
+        .timeout(config::timeout_audio_transcription())
+        .use_rustls_tls()
+        .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
+        .build()
+        .unwrap_or_default();
+
+    info!(
+        "[audio] → transcription '{}' via modèle '{}' (format={})",
+        file_name, model, response_format
+    );
+
+    match client
+        .post(format!("{}/audio/transcriptions", base))
+        .bearer_auth(&bearer)
+        .multipart(form)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            // Pour text/srt/vtt, Albert renvoie du texte brut (pas du JSON).
+            if matches!(response_format.as_str(), "text" | "srt" | "vtt") {
+                let text = resp.text().await.unwrap_or_default();
+                if status.is_success() {
+                    info!("[audio] ✓ transcription reçue ({} caractères)", text.len());
+                } else {
+                    error!(
+                        "[audio] ✗ échec transcription : {} — {}",
+                        status,
+                        truncate_utf8(&text, 500)
+                    );
+                }
+                return (
+                    StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                    Json(json!({ "text": text })),
+                )
+                    .into_response();
+            }
+
+            let body: Value = resp.json().await.unwrap_or(json!({}));
+            if status.is_success() {
+                info!("[audio] ✓ transcription reçue");
+            } else {
+                error!("[audio] ✗ échec transcription : {} — {:?}", status, body);
+            }
+            (
+                StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK),
+                Json(body),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            error!("[audio] ✗ erreur réseau : {}", e);
+            err(StatusCode::BAD_GATEWAY, e.to_string())
         }
     }
 }
