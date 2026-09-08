@@ -137,7 +137,7 @@ sudo apt update && sudo apt install -y \
 ## Démarrage rapide
 
 ```bash
-git clone https://github.com/<votre-org>/demeter.git
+git clone https://github.com/Ktulu-Analog/demeter.git
 cd demeter
 
 cd frontend && npm install && cd ..
