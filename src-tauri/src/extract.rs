@@ -29,9 +29,7 @@ fn decode_text(content: &[u8]) -> String {
 }
 
 fn unsupported_msg(other: &str) -> String {
-    format!(
-        "Format non supporté : .{other}. Formats acceptés : pdf, docx, doc, txt, md, csv."
-    )
+    format!("Format non supporté : .{other}. Formats acceptés : pdf, docx, doc, txt, md, csv.")
 }
 
 /// Applique les vérifications finales communes (vide + troncature UTF-8 sûre).
@@ -102,7 +100,10 @@ fn ocr_fallback_path(_path: &Path) -> Option<String> {
 #[cfg(target_os = "windows")]
 fn ocr_fallback_bytes(content: &[u8]) -> Option<String> {
     use std::io::Write;
-    let dir = tempfile::Builder::new().prefix("demeter_ocr_").tempdir().ok()?;
+    let dir = tempfile::Builder::new()
+        .prefix("demeter_ocr_")
+        .tempdir()
+        .ok()?;
     let p = dir.path().join("scan.pdf");
     let mut f = std::fs::File::create(&p).ok()?;
     f.write_all(content).ok()?;

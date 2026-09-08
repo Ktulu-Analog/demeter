@@ -88,7 +88,8 @@ impl StagedStore {
             .tempdir()
             .map_err(|e| format!("Création dossier de staging impossible : {e}"))?;
         let path = dir.path().to_path_buf();
-        self.batches.insert(id.clone(), StagedBatch::new(id.clone(), dir));
+        self.batches
+            .insert(id.clone(), StagedBatch::new(id.clone(), dir));
         Ok((id, path))
     }
 

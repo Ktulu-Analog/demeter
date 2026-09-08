@@ -79,7 +79,11 @@ pub fn available_memory_bytes() -> u64 {
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
     let avail = sys.available_memory();
-    if avail == 0 { 0 } else { avail }
+    if avail == 0 {
+        0
+    } else {
+        avail
+    }
 }
 
 /// Plafond « par entrée » adapté à la RAM : jamais plus d'une fraction de la
@@ -179,7 +183,8 @@ impl Walker<'_> {
     // ── ZIP ────────────────────────────────────────────────────────────────
 
     fn walk_zip(&mut self, spool: &Path, depth: usize) -> Result<(), String> {
-        let file = File::open(spool).map_err(|e| format!("Lecture archive ZIP impossible : {e}"))?;
+        let file =
+            File::open(spool).map_err(|e| format!("Lecture archive ZIP impossible : {e}"))?;
         let mut arc =
             zip::ZipArchive::new(file).map_err(|e| format!("Archive ZIP invalide : {e}"))?;
 
@@ -204,7 +209,8 @@ impl Walker<'_> {
                 const S_IFMT: u32 = 0o170000;
                 const S_IFLNK: u32 = 0o120000;
                 if mode & S_IFMT == S_IFLNK {
-                    self.errors.push(format!("Lien symbolique ignoré : {}", zf.name()));
+                    self.errors
+                        .push(format!("Lien symbolique ignoré : {}", zf.name()));
                     continue;
                 }
             }
@@ -212,7 +218,8 @@ impl Walker<'_> {
 
             let raw_name = zf.name();
             let Some(name) = sanitize_name(raw_name) else {
-                self.errors.push(format!("Chemin non sûr ignoré : {raw_name}"));
+                self.errors
+                    .push(format!("Chemin non sûr ignoré : {raw_name}"));
                 continue;
             };
             let ext = file_ext(&name);
@@ -224,8 +231,8 @@ impl Walker<'_> {
                 // Archive imbriquée → récursion (après spool) si profondeur restante.
                 if depth > 1 {
                     let scratch = self.new_file()?;
-                    let written =
-                        stream_to(&mut zf, &scratch, self.limits.max_entry_bytes).map_err(|e| {
+                    let written = stream_to(&mut zf, &scratch, self.limits.max_entry_bytes)
+                        .map_err(|e| {
                             let _ = std::fs::remove_file(&scratch);
                             e
                         })?;
@@ -244,12 +251,11 @@ impl Walker<'_> {
 
             if is_doc_ext(&ext) {
                 let path = self.new_file()?;
-                let written = stream_to(&mut zf, &path, self.limits.max_entry_bytes).map_err(
-                    |e| {
+                let written =
+                    stream_to(&mut zf, &path, self.limits.max_entry_bytes).map_err(|e| {
                         let _ = std::fs::remove_file(&path);
                         e
-                    },
-                )?;
+                    })?;
                 self.add_total(written, &path)?;
                 self.leaves.push(Leaf {
                     name,
@@ -270,8 +276,7 @@ impl Walker<'_> {
     fn walk_7z(&mut self, spool: &Path, depth: usize) -> Result<(), String> {
         use sevenz_rust2::{ArchiveReader, Password};
 
-        let file =
-            File::open(spool).map_err(|e| format!("Lecture archive 7z impossible : {e}"))?;
+        let file = File::open(spool).map_err(|e| format!("Lecture archive 7z impossible : {e}"))?;
         let mut reader = ArchiveReader::new(file, Password::empty())
             .map_err(|e| format!("Archive 7z invalide : {e}"))?;
 
@@ -333,7 +338,8 @@ impl Walker<'_> {
 
         let raw_name = entry.name();
         let Some(name) = sanitize_name(raw_name) else {
-            self.errors.push(format!("Chemin non sûr ignoré : {raw_name}"));
+            self.errors
+                .push(format!("Chemin non sûr ignoré : {raw_name}"));
             // Doit malgré tout purger le flux (7z solide).
             drain_reader(rdr, self.limits.max_entry_bytes)?;
             return Ok(true);
@@ -365,11 +371,10 @@ impl Walker<'_> {
 
         if is_doc_ext(&ext) {
             let path = self.new_file()?;
-            let written =
-                stream_to(rdr, &path, self.limits.max_entry_bytes).map_err(|e| {
-                    let _ = std::fs::remove_file(&path);
-                    e
-                })?;
+            let written = stream_to(rdr, &path, self.limits.max_entry_bytes).map_err(|e| {
+                let _ = std::fs::remove_file(&path);
+                e
+            })?;
             self.add_total(written, &path)?;
             self.leaves.push(Leaf {
                 name,

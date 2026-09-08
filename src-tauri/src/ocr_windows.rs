@@ -58,10 +58,9 @@ pub fn ocr_pdf_file(path: &Path, max_pages: usize) -> Result<String, String> {
     let file = block_on(async move { op.await })
         .map_err(|e| ctx_err("ouverture du fichier (async)", e))?;
 
-    let op = PdfDocument::LoadFromFileAsync(&file)
-        .map_err(|e| ctx_err("chargement du PDF", e))?;
-    let doc = block_on(async move { op.await })
-        .map_err(|e| ctx_err("chargement du PDF (async)", e))?;
+    let op = PdfDocument::LoadFromFileAsync(&file).map_err(|e| ctx_err("chargement du PDF", e))?;
+    let doc =
+        block_on(async move { op.await }).map_err(|e| ctx_err("chargement du PDF (async)", e))?;
 
     let count = doc.PageCount().map_err(|e| ctx_err("nb de pages", e))?;
     if count == 0 {
@@ -96,8 +95,7 @@ pub fn ocr_pdf_file(path: &Path, max_pages: usize) -> Result<String, String> {
 
 /// Rend une page PDF dans un flux mémoire, décode l'image puis OCRise.
 fn ocr_one_page(engine: &OcrEngine, page: &windows::Data::Pdf::PdfPage) -> Result<String, String> {
-    let mem =
-        InMemoryRandomAccessStream::new().map_err(|e| ctx_err("flux memoire", e))?;
+    let mem = InMemoryRandomAccessStream::new().map_err(|e| ctx_err("flux memoire", e))?;
     let stream: IRandomAccessStream = mem.cast().map_err(|e| ctx_err("conversion flux", e))?;
 
     // Options : largeur cible ~2200 px (bonne densite pour l'OCR).
@@ -113,8 +111,8 @@ fn ocr_one_page(engine: &OcrEngine, page: &windows::Data::Pdf::PdfPage) -> Resul
     stream.Seek(0).map_err(|e| ctx_err("rewind flux", e))?;
 
     let op = BitmapDecoder::CreateAsync(&stream).map_err(|e| ctx_err("decodage image", e))?;
-    let decoder = block_on(async move { op.await })
-        .map_err(|e| ctx_err("decodage image (async)", e))?;
+    let decoder =
+        block_on(async move { op.await }).map_err(|e| ctx_err("decodage image (async)", e))?;
 
     let op = decoder
         .GetSoftwareBitmapAsync()
@@ -142,8 +140,5 @@ pub fn ocr_software_bitmap(bmp: &SoftwareBitmap) -> Result<String, String> {
         .map_err(|e| ctx_err("reconnaissance", e))?;
     let result: OcrResult =
         block_on(async move { op.await }).map_err(|e| ctx_err("reconnaissance (async)", e))?;
-    Ok(result
-        .Text()
-        .map_err(|e| ctx_err("texte", e))?
-        .to_string())
+    Ok(result.Text().map_err(|e| ctx_err("texte", e))?.to_string())
 }

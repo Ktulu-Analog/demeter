@@ -349,8 +349,9 @@ pub fn build_router(
         )
         .route(
             "/api/extract-multiple",
-            post(extract_multiple_files)
-                .layer(DefaultBodyLimit::max(config::upload_body_max_bytes() as usize)),
+            post(extract_multiple_files).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize,
+            )),
         )
         // Ingestion
         .route("/api/ingestion/collections", get(list_collections))
@@ -384,8 +385,9 @@ pub fn build_router(
         // Uploads multi / staging (.zip/.7z → docs décompressées)
         .route(
             "/api/uploads/stage",
-            post(stage_uploads)
-                .layer(DefaultBodyLimit::max(config::upload_body_max_bytes() as usize)),
+            post(stage_uploads).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize
+            )),
         )
         .route("/api/uploads/batches/:batch_id", get(batch_manifest))
         .route("/api/uploads/batches/:batch_id", delete(delete_batch))
@@ -440,8 +442,9 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         )
         .route(
             "/api/extract-multiple",
-            post(extract_multiple_files)
-                .layer(DefaultBodyLimit::max(config::upload_body_max_bytes() as usize)),
+            post(extract_multiple_files).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize,
+            )),
         )
         .route("/api/ingestion/collections", get(list_collections))
         .route("/api/ingestion/collections", post(create_collection))
@@ -474,8 +477,9 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         // Uploads multi / staging (.zip/.7z → docs décompressées)
         .route(
             "/api/uploads/stage",
-            post(stage_uploads)
-                .layer(DefaultBodyLimit::max(config::upload_body_max_bytes() as usize)),
+            post(stage_uploads).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize
+            )),
         )
         .route("/api/uploads/batches/:batch_id", get(batch_manifest))
         .route("/api/uploads/batches/:batch_id", delete(delete_batch))
@@ -1893,9 +1897,12 @@ async fn spool_field(
     use tokio::io::AsyncWriteExt;
 
     let path = dir.join(format!("{}_{}", tag, uuid::Uuid::new_v4().simple()));
-    let mut out = tokio::fs::File::create(&path)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Création temp : {e}")))?;
+    let mut out = tokio::fs::File::create(&path).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Création temp : {e}"),
+        )
+    })?;
     let mut total: u64 = 0;
     loop {
         match field.chunk().await {
@@ -1911,7 +1918,10 @@ async fn spool_field(
                 }
                 if let Err(e) = out.write_all(&c).await {
                     let _ = tokio::fs::remove_file(&path).await;
-                    return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Écriture temp : {e}")));
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Écriture temp : {e}"),
+                    ));
                 }
             }
             Ok(None) => break,
@@ -1923,7 +1933,10 @@ async fn spool_field(
     }
     if let Err(e) = out.flush().await {
         let _ = tokio::fs::remove_file(&path).await;
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, format!("Flush temp : {e}")));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Flush temp : {e}"),
+        ));
     }
     drop(out);
     Ok((path, total))
@@ -2072,7 +2085,10 @@ async fn stage_uploads(State(state): State<Arc<AppState>>, mut multipart: Multip
         Err(e) => {
             let mut store = state.uploads.write().await;
             store.remove_batch(&batch_id);
-            return err(StatusCode::INTERNAL_SERVER_ERROR, format!("Espace temporaire : {e}"));
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Espace temporaire : {e}"),
+            );
         }
     };
     let mut jobs: Vec<(PathBuf, String, String)> = Vec::new();
@@ -2191,7 +2207,10 @@ async fn batch_manifest(
     let store = state.uploads.read().await;
     match store.batch_manifest(&batch_id) {
         Some(files) => Json(manifest_json(&batch_id, files)).into_response(),
-        None => err(StatusCode::NOT_FOUND, "Batch de staging introuvable ou expiré."),
+        None => err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        ),
     }
 }
 
@@ -2202,7 +2221,10 @@ async fn delete_batch_file(
 ) -> Response {
     let mut store = state.uploads.write().await;
     if store.get(&p.batch_id).is_none() {
-        return err(StatusCode::NOT_FOUND, "Batch de staging introuvable ou expiré.");
+        return err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        );
     }
     if store.remove_doc(&p.batch_id, &p.file_id) {
         let files = store.batch_manifest(&p.batch_id).unwrap_or_default();
@@ -2213,12 +2235,18 @@ async fn delete_batch_file(
 }
 
 /// Annule/purge un batch de staging complet.
-async fn delete_batch(State(state): State<Arc<AppState>>, Path(batch_id): Path<String>) -> Response {
+async fn delete_batch(
+    State(state): State<Arc<AppState>>,
+    Path(batch_id): Path<String>,
+) -> Response {
     let mut store = state.uploads.write().await;
     if store.remove_batch(&batch_id) {
         Json(json!({ "ok": true, "removed": batch_id })).into_response()
     } else {
-        err(StatusCode::NOT_FOUND, "Batch de staging introuvable ou expiré.")
+        err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        )
     }
 }
 
@@ -2262,7 +2290,10 @@ async fn batch_ingest(
             .map(|b| b.docs.values().cloned().collect())
     };
     let Some(docs) = snapshot else {
-        return err(StatusCode::NOT_FOUND, "Batch de staging introuvable ou expiré.");
+        return err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        );
     };
 
     let albert_endpoint = creds.endpoint.clone();
