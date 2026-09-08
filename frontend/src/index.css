@@ -1,6 +1,12 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
+  /* Jour (mode clair) — thème par défaut.
+     La bascule jour/nuit est pilotée par l'attribut data-theme posé sur
+     <html> (voir App.tsx et index.html), plus aucune dépendance à la
+     préférence OS pour les variables ci-dessous. */
+  color-scheme: light;
+
   --bg-primary:      #ffffff;
   --bg-secondary:    #f4f4f4;
   --bg-tertiary:     #e8e8e8;
@@ -41,31 +47,32 @@
   --shadow-lg:       0 10px 30px rgba(0,0,0,0.1), 0 4px 8px rgba(0,0,0,0.05);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary:      #1a1a1a;
-    --bg-secondary:    #242424;
-    --bg-tertiary:     #111111;
-    --bg-hover:        #2e2e2e;
-    --text-primary:    #f0f0f0;
-    --text-secondary:  #aaaaaa;
-    --text-tertiary:   #666666;
-    --border-light:    rgba(255,255,255,0.07);
-    --border-medium:   rgba(255,255,255,0.14);
-    --green-light:     #2a2a2a;
-    --green-dark:      #dddddd;
-    --green-deep:      #f0f0f0;
-    --green-glow:      rgba(255,255,255,0.07);
-    --amber-light:     #3a2408;
-    --amber-dark:      #fac775;
-    --blue-light:      #071e35;
-    --blue-dark:       #85b7eb;
-    --red-light:       #2d0d0d;
-    --red-dark:        #f09595;
-    --shadow-sm:       0 1px 3px rgba(0,0,0,0.3);
-    --shadow-md:       0 4px 12px rgba(0,0,0,0.35);
-    --shadow-lg:       0 10px 30px rgba(0,0,0,0.45);
-  }
+/* Nuit (mode sombre) — activé par <html data-theme="dark">. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-primary:      #1a1a1a;
+  --bg-secondary:    #242424;
+  --bg-tertiary:     #111111;
+  --bg-hover:        #2e2e2e;
+  --text-primary:    #f0f0f0;
+  --text-secondary:  #aaaaaa;
+  --text-tertiary:   #666666;
+  --border-light:    rgba(255,255,255,0.07);
+  --border-medium:   rgba(255,255,255,0.14);
+  --green-light:     #2a2a2a;
+  --green-dark:      #dddddd;
+  --green-deep:      #f0f0f0;
+  --green-glow:      rgba(255,255,255,0.07);
+  --amber-light:     #3a2408;
+  --amber-dark:      #fac775;
+  --blue-light:      #071e35;
+  --blue-dark:       #85b7eb;
+  --red-light:       #2d0d0d;
+  --red-dark:        #f09595;
+  --shadow-sm:       0 1px 3px rgba(0,0,0,0.3);
+  --shadow-md:       0 4px 12px rgba(0,0,0,0.35);
+  --shadow-lg:       0 10px 30px rgba(0,0,0,0.45);
 }
 
 html, body, #root { height: 100%; }

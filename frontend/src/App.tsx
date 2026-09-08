@@ -32,7 +32,7 @@ import { IngestionModal } from './components/IngestionModal';
 import { AudioTranscriptionModal } from './components/AudioTranscriptionModal';
 import { CompareModeView } from './components/CompareMode';
 import './CompareMode.css';
-import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
+import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, ARCHIVE_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
 
 const DEFAULT_EXTRA_MODELS = [
   'openai/gpt-oss-120b',
@@ -146,6 +146,39 @@ function AppInner() {
 
   const [showSettings,      setShowSettings]      = useState(!settings.endpoint);
   const [showMcpPanel,      setShowMcpPanel]      = useState(false);
+
+  // ── Mode jour/nuit ─────────────────────────────────────────────────────
+  // Le thème est appliqué via l'attribut data-theme="light|dark" sur <html>
+  // (voir index.css + index.html). Au premier lancement on suit la préférence
+  // OS ; dès que l'utilisateur clique sur l'icône, son choix est mémorisé dans
+  // localStorage (clé demeter_theme) et reste actif.
+  type Theme = 'light' | 'dark';
+  const themeUserSetRef = useRef<boolean>(!!localStorage.getItem('demeter_theme'));
+  const [theme, setTheme] = useState<Theme>(() => {
+    const saved = localStorage.getItem('demeter_theme');
+    if (saved === 'light' || saved === 'dark') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+  // Tant que l'utilisateur n'a pas choisi manuellement, on suit le système.
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent) => {
+      if (!themeUserSetRef.current) setTheme(e.matches ? 'dark' : 'light');
+    };
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  const toggleTheme = () => {
+    themeUserSetRef.current = true;
+    setTheme(prev => {
+      const next: Theme = prev === 'dark' ? 'light' : 'dark';
+      try { localStorage.setItem('demeter_theme', next); } catch { /* quota/privé */ }
+      return next;
+    });
+  };
 
   // Initialise AppState Rust dès le démarrage via IPC Tauri (pas HTTP).
   // On attend la résolution de la Promise avant d'autoriser les fetches HTTP
@@ -507,7 +540,7 @@ function AppInner() {
     e.preventDefault(); setInputDragOver(false);
     const files      = Array.from(e.dataTransfer.files);
     const imageFiles = files.filter(f => IMAGE_MIME.includes(f.type));
-    const docFiles   = files.filter(f => DOC_EXTS.includes(f.name.toLowerCase().split('.').pop() || ''));
+    const docFiles   = files.filter(f => [...DOC_EXTS, ...ARCHIVE_EXTS].includes(f.name.toLowerCase().split('.').pop() || ''));
     if (imageFiles.length) await addImageAttachments(imageFiles);
     if (docFiles.length) {
       const dt = new DataTransfer(); docFiles.forEach(f => dt.items.add(f));
@@ -520,10 +553,10 @@ function AppInner() {
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (!selectedFiles.length) return;
     const getExt  = (f: File) => f.name.toLowerCase().split('.').pop() || '';
-    const invalid = selectedFiles.filter(f => !([...IMAGE_EXTS, ...DOC_EXTS].includes(getExt(f))));
+    const invalid = selectedFiles.filter(f => !([...IMAGE_EXTS, ...DOC_EXTS, ...ARCHIVE_EXTS].includes(getExt(f))));
     if (invalid.length) { toastFn(`Fichiers non supportés : ${invalid.map(f => f.name).join(', ')}`, 'error'); return; }
     const images = selectedFiles.filter(f => IMAGE_EXTS.includes(getExt(f)));
-    const docs   = selectedFiles.filter(f => DOC_EXTS.includes(getExt(f)));
+    const docs   = selectedFiles.filter(f => [...DOC_EXTS, ...ARCHIVE_EXTS].includes(getExt(f)));
     setExtracting(true);
     try {
       const imageAttachments = await Promise.all(images.map(f => new Promise<Attachment>((resolve, reject) => {
@@ -903,6 +936,23 @@ function AppInner() {
                 </div>
               ) : (<span className="badge badge-green"><span className="badge-dot" />{activeModel || settings.model}</span>)
             ) : (<span className="badge badge-red" onClick={() => setShowSettings(true)} style={{ cursor: 'pointer' }}>⚠ Non configuré</span>)}
+            <button
+              type="button"
+              className="theme-toggle-btn"
+              onClick={toggleTheme}
+              title={theme === 'dark' ? 'Passer en mode jour (clair)' : 'Passer en mode nuit (sombre)'}
+              aria-label={theme === 'dark' ? 'Passer en mode jour' : 'Passer en mode nuit'}
+            >
+              {theme === 'dark' ? (
+                <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16" aria-hidden="true">
+                  <path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4.243 1.757a1 1 0 010 1.414l-.707.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM18 9a1 1 0 110 2h-1a1 1 0 110-2h1zM10 14a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zm6.243-1.757a1 1 0 010 1.414l-.707.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM4.757 6.343a1 1 0 010 1.414l-.707.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM6.343 4.757a1 1 0 010 1.414l-.707.707A1 1 0 115.636 5.05l.707-.707a1 1 0 011.414 0zM4 10a1 1 0 01-1 1H2a1 1 0 110-2h1a1 1 0 011 1zm6 0a4 4 0 110 8 4 4 0 010-8zm0 2a2 2 0 100 4 2 2 0 000-4z" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 20 20" fill="currentColor" width="15" height="15" aria-hidden="true">
+                  <path d="M17.293 13.293A8 8 0 016.707 2.707a8.001 8.001 0 1010.586 10.586z" />
+                </svg>
+              )}
+            </button>
           </div>
         </header>
 
@@ -915,7 +965,7 @@ function AppInner() {
                   <h2 className="welcome-title">{activeSpace ? (activeSpace as { label?: string }).label : 'Bonjour\u00a0!'}</h2>
                   <p className="welcome-sub">
                     {activeSpace ? 'Espace dédié — posez vos questions ou choisissez une suggestion ci-dessous.' : 'Votre assistant RH intelligent.'}<br />
-                    <span className="welcome-attach-hint">📎 Joignez un PDF, Word ou image — ou collez une image directement (Ctrl+V).</span>
+                    <span className="welcome-attach-hint">📎 Joignez un PDF, Word, ZIP/7z ou une image — ou collez une image directement (Ctrl+V). Les archives sont décompressées en documents.</span>
                   </p>
                   <div className="suggestion-grid">
                     {loadingSpaces
@@ -952,7 +1002,7 @@ function AppInner() {
             )}
 
             <div className="input-zone">
-              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.webp" style={{ display: 'none' }} multiple onChange={handleFileChange} />
+              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.doc,.txt,.md,.csv,.zip,.7z,.png,.jpg,.jpeg,.gif,.webp" style={{ display: 'none' }} multiple onChange={handleFileChange} />
               <div className={`input-box ${loading ? 'input-box--loading' : ''} ${inputDragOver ? 'input-box--dragover' : ''}`} onDragOver={handleInputDragOver} onDragLeave={handleInputDragLeave} onDrop={handleInputDrop}>
                 {inputDragOver && (
                   <div className="input-drop-overlay">

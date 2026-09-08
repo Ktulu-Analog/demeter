@@ -21,6 +21,8 @@ export const API_BASE: string = isTauri ? 'http://localhost:45678' : '';
 export const IMAGE_MIME: string[] = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 export const IMAGE_EXTS: string[] = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
 export const DOC_EXTS: string[]   = ['pdf', 'docx', 'doc'];
+/** Archives acceptées : chaque fichier qu'elles contiennent devient un document. */
+export const ARCHIVE_EXTS: string[] = ['zip', '7z'];
 export const ACCEPTED_DOC_EXTS    = new Set(['.pdf', '.docx', '.doc', '.txt', '.md', '.markdown', '.rst', '.csv']);
 
 export const MIME_TO_EXT: Record<string, string> = {

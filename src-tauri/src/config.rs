@@ -186,3 +186,47 @@ pub fn timeout_models() -> Duration {
 pub fn timeout_audio_transcription() -> Duration {
     Duration::from_secs(env_u64("TIMEOUT_AUDIO_TRANSCRIPTION_SECS", 600))
 }
+
+// ── Uploads d'archives (.zip/.7z) ────────────────────────────────────────────
+
+/// Taille max d'un corps d'upload d'archive (multipart) (défaut : 1 GiB).
+pub fn upload_body_max_bytes() -> u64 {
+    env_u64("UPLOAD_BODY_MAX_BYTES", 1024 * 1024 * 1024)
+}
+
+/// Profondeur maximale d'archives imbriquées (garde-fou anti récursion infinie).
+pub fn archive_max_depth() -> usize {
+    env_usize("ARCHIVE_MAX_DEPTH", 5)
+}
+
+/// Nombre max d'entrées (fichiers + conteneurs imbriqués) traitées par archive.
+pub fn archive_max_entries() -> usize {
+    env_usize("ARCHIVE_MAX_ENTRIES", 2000)
+}
+
+/// Taille max décompressée d'une entrée (défaut : 256 MiB).
+pub fn archive_max_entry_bytes() -> u64 {
+    env_u64("ARCHIVE_MAX_ENTRY_BYTES", 256 * 1024 * 1024)
+}
+
+/// Taille totale décompressée max par requête/batch (défaut : 2 GiB).
+pub fn archive_max_total_bytes() -> u64 {
+    env_u64("ARCHIVE_MAX_TOTAL_BYTES", 2 * 1024 * 1024 * 1024)
+}
+
+/// Ratio max compressé→décompressé déclaré (anti bombe zip) (défaut : 200).
+pub fn archive_max_ratio() -> u64 {
+    env_u64("ARCHIVE_MAX_RATIO", 200)
+}
+
+/// Durée de vie d'un batch de staging (avant purge par le GC) (défaut : 1 h).
+pub fn upload_batch_ttl() -> Duration {
+    Duration::from_secs(env_u64("UPLOAD_BATCH_TTL_SECS", 3600))
+}
+
+// ── OCR natif (Windows.Media.Ocr en secours sur PDF scanné) ─────────────────
+
+/// Nombre max de pages OCRisées par PDF (défaut : 30) — borne le coût.
+pub fn ocr_max_pages() -> usize {
+    env_usize("OCR_MAX_PAGES", 30)
+}

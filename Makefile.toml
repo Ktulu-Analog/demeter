@@ -1,0 +1,110 @@
+# ==============================================================================
+# Makefile.toml (pour cargo-make)
+# Usage : cargo make <nom_de_la_tache>
+# ==============================================================================
+#
+#
+#| Commande | Description | OS supporté |
+#| :--- | :--- | :--- |
+#| `cargo make run-dev` | Installe le frontend et lance le serveur de développement (`cargo tauri dev`). | Tous |
+#| `cargo make run-rls` | Lance l'application en dev mais compilée avec le flag `--release`. | Tous |
+#| `cargo make release` | **Automatique :** Détecte si vous êtes sous Windows ou Linux et exécute le bon build de prod. | Tous |
+#| `cargo make release-win` | Force le build release Windows via PowerShell (sans WSL/Bash). | Windows |
+#| `cargo make release-linux` | Force le build release Linux/macOS via Shell Bash. | Linux / macOS |
+#| `cargo make clean` | Supprime `target/`, `node_modules` et `dist`. | Tous |
+#
+#
+
+[config]
+default_to_workspace = false
+
+# ------------------------------------------------------------------------------
+# 1. TÂCHES PRÉREQUIS (installation frontend)
+# ------------------------------------------------------------------------------
+[tasks.install-frontend]
+description = "Installe les dépendances npm du frontend"
+cwd = "frontend"
+script_runner = "powershell"
+script_extension = "ps1"
+script = '''
+npm install
+'''
+
+#-----------------------------------------------------------
+# 2. RUNDEV (MODE DÉVELOPPEMENT)
+# ------------------------------------------------------------------------------
+
+[tasks.run-dev]
+description = "Lance le projet en mode dev (Tauri gère le predev automatiquement)"
+dependencies = ["install-frontend"]
+command = "cargo"
+args = ["tauri", "dev"]
+
+[tasks.run-rls]
+description = "Lance le projet en mode dev avec les optimisations release (cargo tauri dev --release)"
+dependencies = ["install-frontend"]
+command = "cargo"
+args = ["tauri", "dev", "--release"]
+
+# ------------------------------------------------------------------------------
+# 3. RELEASE PROCESS (BUILD DE PRODUCTION)
+# ------------------------------------------------------------------------------
+
+# --- Linux / macOS (utilise bash & fetch-mcp-pack.sh) ---
+[tasks.release-linux]
+description = "Build de production pour Linux / macOS (via scripts Bash)"
+script = '''
+./scripts/fetch-mcp-pack.sh
+cd frontend && npm install && npm run build && cd ..
+cargo tauri build
+'''
+
+# --- Windows (utilise PowerShell, zéro dépendance WSL/Bash) ---
+[tasks.release-win]
+description = "Build de production pour Windows (via PowerShell / fetch-mcp-pack.ps1)"
+script_runner = "powershell"
+script_extension = "ps1"
+script = '''
+$ErrorActionPreference = "Stop"
+
+# 1. Récupération MCP en PowerShell s'il existe, sinon avertissement
+if (Test-Path "scripts/fetch-mcp-pack.ps1") {
+    Write-Host "==> Exécution du script MCP Windows..." -ForegroundColor Green
+    & .\scripts\fetch-mcp-pack.ps1
+} else {
+    Write-Host "==> Attention: scripts/fetch-mcp-pack.ps1 introuvable. Vérifiez que les serveurs MCP sont présents dans mcp-servers/." -ForegroundColor Yellow
+}
+
+# 2. Build Frontend
+Write-Host "==> Installation et compilation du frontend..." -ForegroundColor Green
+Set-Location frontend
+npm install
+npm run build
+Set-Location ..
+
+# 3. Build Tauri
+Write-Host "==> Compilation de l'application Tauri..." -ForegroundColor Green
+cargo tauri build
+'''
+
+# --- Tâche release automatique selon l'OS ---
+[tasks.release]
+description = "Détecte automatiquement l'OS et lance le build release approprié"
+run_task = [
+    { name = "release-win", condition = { os = ["windows"] } },
+    { name = "release-linux" }
+]
+
+# ------------------------------------------------------------------------------
+# 4. NETTOYAGE
+# ------------------------------------------------------------------------------
+
+[tasks.clean]
+description = "Nettoie les artefacts de compilation Rust et du Frontend"
+script_runner = "powershell"
+script_extension = "ps1"
+script = '''
+cargo clean
+if (Test-Path "frontend/node_modules") { Remove-Item -Recurse -Force "frontend/node_modules" }
+if (Test-Path "frontend/dist") { Remove-Item -Recurse -Force "frontend/dist" }
+'''

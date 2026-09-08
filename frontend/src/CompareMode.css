@@ -8,11 +8,9 @@
   --compare-accent-a: #2E75B6;
   --compare-accent-b: #0F6E56;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --compare-accent-a: #5ba3e0;
-    --compare-accent-b: #2db88e;
-  }
+:root[data-theme="dark"] {
+  --compare-accent-a: #5ba3e0;
+  --compare-accent-b: #2db88e;
 }
 
 /* ── Overlay plein écran ── */
@@ -363,12 +361,10 @@
   border: 1px solid #f0d08a;
   flex-shrink: 0;
 }
-@media (prefers-color-scheme: dark) {
-  .cmp-winner-badge {
-    background: #3a2408;
-    color: #fac775;
-    border-color: #6a4012;
-  }
+:root[data-theme="dark"] .cmp-winner-badge {
+  background: #3a2408;
+  color: #fac775;
+  border-color: #6a4012;
 }
 
 /* ── Corps du panneau ── */

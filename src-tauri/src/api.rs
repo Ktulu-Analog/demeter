@@ -45,8 +45,9 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info, warn};
 
 use crate::{
+    archive,
     db::Database,
-    extract::extract_text,
+    extract::{extract_text, extract_text_file},
     models::*,
     rag::{
         self as rag, albert_base, build_system_with_rag, chunks_to_context,
@@ -54,6 +55,7 @@ use crate::{
         rerank_chunks, retrieve_context_with_chunks, search_chunks, QdrantCollectionAccess,
     },
     spaces::{load_spaces, save_spaces},
+    staged,
 };
 
 // ── System prompt constants ───────────────────────────────────────────────────
@@ -296,6 +298,9 @@ pub struct AppState {
     /// Tauri), utilisé par le bouton "Installer les MCP officiels" du panel.
     /// `None` si l'app ne bundle aucun MCP (ex : build de dev sans resources).
     pub official_mcp_dir: Option<PathBuf>,
+    /// VFS éphémère : batchs de staging des documents décompressés/uploadés
+    /// (fichiers spoolés sur disque + index BTree en RAM, supprimables).
+    pub uploads: Arc<RwLock<staged::StagedStore>>,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -313,6 +318,7 @@ pub fn build_router(
         mcp_stdio: crate::mcp_stdio::StdioManager::new(),
         mcp_env: Arc::new(RwLock::new(HashMap::new())),
         official_mcp_dir,
+        uploads: Arc::new(RwLock::new(staged::StagedStore::new())),
     });
 
     let cors = CorsLayer::new()
@@ -343,7 +349,9 @@ pub fn build_router(
         )
         .route(
             "/api/extract-multiple",
-            post(extract_multiple_files).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+            post(extract_multiple_files).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize,
+            )),
         )
         // Ingestion
         .route("/api/ingestion/collections", get(list_collections))
@@ -374,6 +382,20 @@ pub fn build_router(
             "/api/ingestion/upload",
             post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
+        // Uploads multi / staging (.zip/.7z → docs décompressées)
+        .route(
+            "/api/uploads/stage",
+            post(stage_uploads).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize
+            )),
+        )
+        .route("/api/uploads/batches/:batch_id", get(batch_manifest))
+        .route("/api/uploads/batches/:batch_id", delete(delete_batch))
+        .route(
+            "/api/uploads/batches/:batch_id/files/:file_id",
+            delete(delete_batch_file),
+        )
+        .route("/api/uploads/batches/:batch_id/ingest", post(batch_ingest))
         // Audio (transcription + diarization)
         .route(
             "/api/audio/transcriptions",
@@ -420,7 +442,9 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         )
         .route(
             "/api/extract-multiple",
-            post(extract_multiple_files).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+            post(extract_multiple_files).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize,
+            )),
         )
         .route("/api/ingestion/collections", get(list_collections))
         .route("/api/ingestion/collections", post(create_collection))
@@ -450,6 +474,20 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/ingestion/upload",
             post(upload_document).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
         )
+        // Uploads multi / staging (.zip/.7z → docs décompressées)
+        .route(
+            "/api/uploads/stage",
+            post(stage_uploads).layer(DefaultBodyLimit::max(
+                config::upload_body_max_bytes() as usize
+            )),
+        )
+        .route("/api/uploads/batches/:batch_id", get(batch_manifest))
+        .route("/api/uploads/batches/:batch_id", delete(delete_batch))
+        .route(
+            "/api/uploads/batches/:batch_id/files/:file_id",
+            delete(delete_batch_file),
+        )
+        .route("/api/uploads/batches/:batch_id/ingest", post(batch_ingest))
         .route(
             "/api/audio/transcriptions",
             post(transcribe_audio).layer(DefaultBodyLimit::max(300 * 1024 * 1024)),
@@ -1780,34 +1818,57 @@ async fn extract_file(mut multipart: Multipart) -> Response {
 }
 
 async fn extract_multiple_files(mut multipart: Multipart) -> Response {
-    let mut results: Vec<Value> = Vec::new();
-    let mut errors: Vec<Value> = Vec::new();
-    let mut count = 0;
-
-    while let Ok(Some(field)) = multipart.next_field().await {
-        if count >= 10 {
-            break;
+    // ── Spooling : chaque fichier (doc OU archive) est écrit sur disque ──────
+    // (les .zip/.7z peuvent être volumineux ; on ne les charge jamais en RAM).
+    let spool = match tempfile::Builder::new()
+        .prefix("demeter_extract_")
+        .tempdir()
+    {
+        Ok(d) => d,
+        Err(e) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Espace temporaire indisponible : {e}"),
+            )
         }
-        count += 1;
+    };
 
+    let mut jobs: Vec<(PathBuf, String, String)> = Vec::new(); // (spool, filename, ext)
+    let mut errors: Vec<Value> = Vec::new();
+    while let Ok(Some(field)) = multipart.next_field().await {
         let filename = field.file_name().unwrap_or("file").to_string();
         let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-        let bytes = match field.bytes().await {
-            Ok(b) => b,
-            Err(e) => {
-                errors.push(json!({"filename": filename, "error": e.to_string()}));
-                continue;
+        match spool_field(field, spool.path(), "f", config::upload_body_max_bytes()).await {
+            Ok((path, _n)) => jobs.push((path, filename, ext)),
+            Err((code, msg)) => {
+                errors.push(json!({ "filename": filename, "error": msg }));
+                let _ = code;
             }
-        };
+        }
+    }
 
-        match extract_text(&bytes, &ext) {
-            Ok(text) => {
-                let chars = text.chars().count();
-                results
-                    .push(json!({"filename": filename, "text": text, "chars": chars, "ext": ext}));
+    let mut results: Vec<Value> = Vec::new();
+    if !jobs.is_empty() {
+        // Traitement CPU (décompression + extraction) hors du runtime async.
+        let limits = archive_limits();
+        let handled = tokio::task::spawn_blocking(move || {
+            let mut out = Vec::new();
+            for (path, filename, ext) in jobs {
+                out.push(extract_field_sync(&path, &filename, &ext, &limits));
             }
-            Err(e) => {
-                errors.push(json!({"filename": filename, "error": e.to_string()}));
+            out
+        })
+        .await
+        .unwrap_or_default();
+
+        for field_out in handled {
+            for d in field_out.files {
+                results.push(
+                    json!({"filename": d.name, "text": d.text, "chars": d.chars, "ext": d.ext}),
+                );
+            }
+            for e in field_out.errors {
+                errors.push(json!({ "filename": field_out.root, "error": e }));
             }
         }
     }
@@ -1821,6 +1882,494 @@ async fn extract_multiple_files(mut multipart: Multipart) -> Response {
 
     let total = results.len();
     Json(json!({"files": results, "errors": errors, "total": total})).into_response()
+}
+
+// ── Helpers uploads (spooling + extraction sync) ─────────────────────────────
+
+/// Spool un champ multipart (fichier) vers le disque, en streaming (`chunk()`),
+/// avec plafond de taille. Retourne le chemin écrit.
+async fn spool_field(
+    mut field: axum::extract::multipart::Field<'_>,
+    dir: &std::path::Path,
+    tag: &str,
+    max: u64,
+) -> Result<(PathBuf, u64), (StatusCode, String)> {
+    use tokio::io::AsyncWriteExt;
+
+    let path = dir.join(format!("{}_{}", tag, uuid::Uuid::new_v4().simple()));
+    let mut out = tokio::fs::File::create(&path).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Création temp : {e}"),
+        )
+    })?;
+    let mut total: u64 = 0;
+    loop {
+        match field.chunk().await {
+            Ok(Some(c)) => {
+                total += c.len() as u64;
+                if total > max {
+                    drop(out);
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!("Fichier trop volumineux (>{max} octets)."),
+                    ));
+                }
+                if let Err(e) = out.write_all(&c).await {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Écriture temp : {e}"),
+                    ));
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err((StatusCode::BAD_REQUEST, e.to_string()));
+            }
+        }
+    }
+    if let Err(e) = out.flush().await {
+        let _ = tokio::fs::remove_file(&path).await;
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Flush temp : {e}"),
+        ));
+    }
+    drop(out);
+    Ok((path, total))
+}
+
+/// Limites d'expansion adaptées à la RAM disponible (plafond/entrée borné).
+fn archive_limits() -> archive::Limits {
+    let mut l = archive::Limits::from_config();
+    l.max_entry_bytes = archive::effective_entry_cap(l.max_entry_bytes);
+    l
+}
+
+struct DocOut {
+    name: String,
+    ext: String,
+    text: String,
+    chars: usize,
+}
+
+struct FieldOut {
+    root: String,
+    files: Vec<DocOut>,
+    errors: Vec<String>,
+}
+
+/// Traitement (bloquant) d'un fichier spoolé : document direct → un extrait ;
+/// archive → expansion + un extrait par feuille. Erreurs par entrée en `errors`.
+fn extract_field_sync(
+    spooled: &std::path::Path,
+    root: &str,
+    ext: &str,
+    limits: &archive::Limits,
+) -> FieldOut {
+    let mut out = FieldOut {
+        root: root.to_string(),
+        files: Vec::new(),
+        errors: Vec::new(),
+    };
+
+    if archive::is_doc_ext(ext) {
+        // Document direct : on refuse au-delà du plafond RAM/entrée (extraction
+        // du PDF/DOCX en mémoire pour cet unique fichier).
+        if let Ok(md) = std::fs::metadata(spooled) {
+            if md.len() > limits.max_entry_bytes {
+                out.errors.push(format!(
+                    "{root} : fichier trop volumineux (>{}) — plafond par entrée.",
+                    limits.max_entry_bytes
+                ));
+                return out;
+            }
+        }
+        match extract_text_file(spooled, ext) {
+            Ok(text) => out.files.push(DocOut {
+                name: root.to_string(),
+                ext: ext.to_string(),
+                chars: text.chars().count(),
+                text,
+            }),
+            Err(e) => out.errors.push(format!("{root} : {e}")),
+        }
+        return out;
+    }
+
+    if archive::is_archive_ext(ext) {
+        let dir = match tempfile::Builder::new().prefix("demeter_expand_").tempdir() {
+            Ok(d) => d,
+            Err(e) => {
+                out.errors.push(format!("{root} : espace temporaire : {e}"));
+                return out;
+            }
+        };
+        match archive::expand_archive(spooled, ext, dir.path(), limits) {
+            Ok(res) => {
+                for leaf in res.leaves {
+                    match extract_text_file(&leaf.path, &leaf.ext) {
+                        Ok(text) => out.files.push(DocOut {
+                            name: leaf.name,
+                            ext: leaf.ext,
+                            chars: text.chars().count(),
+                            text,
+                        }),
+                        Err(e) => out.errors.push(format!("{} : {e}", leaf.name)),
+                    }
+                }
+                for e in res.errors {
+                    out.errors.push(e);
+                }
+            }
+            Err(e) => out.errors.push(format!("{root} : {e}")),
+        }
+        return out;
+    }
+
+    out.errors.push(format!(
+        "{root} : format non supporté (zip/7z ou pdf/docx/doc/txt/md/csv)."
+    ));
+    out
+}
+
+// ── Uploads multi & staging RAG (.zip/.7z → VFS éphémère) ────────────────────
+// Flux : POST /api/uploads/stage → batch_id + liste de docs (sur disque, index
+// BTree). L'UI peut lister / SUPPRIMER des docs avant ingestion, puis déclencher
+// POST .../ingest (dépôt final = collection Qdrant). Le batch est éphémère (TTL).
+
+#[derive(serde::Deserialize)]
+struct BatchFilePath {
+    batch_id: String,
+    file_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BatchIngestReq {
+    collection_id: String,
+    #[serde(default)]
+    chunk_size: Option<usize>,
+    #[serde(default)]
+    chunk_overlap: Option<usize>,
+}
+
+fn manifest_json(batch_id: &str, files: Vec<Value>) -> Value {
+    json!({
+        "ok": true,
+        "batch_id": batch_id,
+        "files": files,
+        "total": files.len(),
+    })
+}
+
+/// Dépose des fichiers (documents directs ET/OU archives .zip/.7z) dans un
+/// nouveau batch de staging. Les archives sont décompressées sur disque ; chaque
+/// feuille devient un document supprimable du batch.
+async fn stage_uploads(State(state): State<Arc<AppState>>, mut multipart: Multipart) -> Response {
+    // 1) Créer le batch (tempdir détenu par le store).
+    let (batch_id, batch_dir) = {
+        let mut store = state.uploads.write().await;
+        match store.create_batch() {
+            Ok(v) => v,
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        }
+    };
+    let batch_dir = std::path::PathBuf::from(batch_dir);
+
+    // 2) Spooler chaque champ `files` dans un espace de travail éphémère.
+    let scratch = match tempfile::Builder::new().prefix("demeter_stage_").tempdir() {
+        Ok(d) => d,
+        Err(e) => {
+            let mut store = state.uploads.write().await;
+            store.remove_batch(&batch_id);
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Espace temporaire : {e}"),
+            );
+        }
+    };
+    let mut jobs: Vec<(PathBuf, String, String)> = Vec::new();
+    let mut spool_errors: Vec<String> = Vec::new();
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let is_file = field.name().map(|n| n == "files").unwrap_or(true);
+        if !is_file {
+            let _ = field.bytes().await;
+            continue;
+        }
+        let filename = field.file_name().unwrap_or("file").to_string();
+        let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+        match spool_field(field, scratch.path(), "f", config::upload_body_max_bytes()).await {
+            Ok((p, _)) => jobs.push((p, filename, ext)),
+            Err((_, msg)) => spool_errors.push(format!("{filename} : {msg}")),
+        }
+    }
+
+    // 3) Traitement CPU : document direct → déplacé dans le batch ; archive →
+    //    expansion dans le dossier du batch (feuilles sur disque).
+    let limits = archive_limits();
+    let batch_dir_for_task = batch_dir.clone();
+    let jobs_for_task = jobs;
+    let (registered, expand_errors) = tokio::task::spawn_blocking(move || {
+        let mut reg: Vec<(String, String, u64, PathBuf)> = Vec::new();
+        let mut errs: Vec<String> = Vec::new();
+        let mut idx: u64 = 0;
+        for (path, filename, ext) in jobs_for_task {
+            if archive::is_doc_ext(&ext) {
+                idx += 1;
+                let dest = batch_dir_for_task.join(format!("d{idx:08}"));
+                if std::fs::rename(&path, &dest).is_err() {
+                    let _ = std::fs::copy(&path, &dest);
+                    let _ = std::fs::remove_file(&path);
+                }
+                let size = std::fs::metadata(&dest).map(|m| m.len()).unwrap_or(0);
+                // Même plafond par entrée que les feuilles d'archive (RAM-safe).
+                if size > limits.max_entry_bytes {
+                    let _ = std::fs::remove_file(&dest);
+                    errs.push(format!(
+                        "{filename} : fichier trop volumineux (>{}) — plafond par entrée.",
+                        limits.max_entry_bytes
+                    ));
+                    continue;
+                }
+                reg.push((filename, ext, size, dest));
+            } else if archive::is_archive_ext(&ext) {
+                match archive::expand_archive(&path, &ext, &batch_dir_for_task, &limits) {
+                    Ok(out) => {
+                        for leaf in out.leaves {
+                            reg.push((leaf.name, leaf.ext, leaf.size, leaf.path));
+                        }
+                        for e in out.errors {
+                            errs.push(e);
+                        }
+                    }
+                    Err(e) => errs.push(format!("{filename} : {e}")),
+                }
+                let _ = std::fs::remove_file(&path);
+            } else {
+                errs.push(format!(
+                    "{filename} : format non supporté (zip/7z ou document)."
+                ));
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+        (reg, errs)
+    })
+    .await
+    .unwrap_or_default();
+
+    // 4) Enregistrer dans le store (index BTree) puis répondre le manifest.
+    let mut store = state.uploads.write().await;
+    match store.register_files(&batch_id, registered) {
+        Ok(files) => {
+            let all_errs: Vec<String> = expand_errors.into_iter().chain(spool_errors).collect();
+            if files.is_empty() {
+                // Rien d'ingérable : on purge le batch et on renvoie les erreurs.
+                store.remove_batch(&batch_id);
+                return err(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    if all_errs.is_empty() {
+                        "Aucun fichier recevable.".to_string()
+                    } else {
+                        all_errs.join("\n")
+                    },
+                );
+            }
+            let mut resp_errors: Vec<Value> = all_errs
+                .into_iter()
+                .map(|e| json!({ "error": e }))
+                .collect();
+            resp_errors.sort_by(|a, b| {
+                a["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .cmp(b["error"].as_str().unwrap_or(""))
+            });
+            resp_errors.dedup();
+            let mut resp = manifest_json(&batch_id, files);
+            resp["errors"] = json!(resp_errors);
+            Json(resp).into_response()
+        }
+        Err(e) => {
+            store.remove_batch(&batch_id);
+            err(StatusCode::INTERNAL_SERVER_ERROR, e)
+        }
+    }
+}
+
+/// Manifest courant d'un batch (liste des docs en staging).
+async fn batch_manifest(
+    State(state): State<Arc<AppState>>,
+    Path(batch_id): Path<String>,
+) -> Response {
+    let store = state.uploads.read().await;
+    match store.batch_manifest(&batch_id) {
+        Some(files) => Json(manifest_json(&batch_id, files)).into_response(),
+        None => err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        ),
+    }
+}
+
+/// Supprime un document du staging (fichier + index) avant ingestion.
+async fn delete_batch_file(
+    State(state): State<Arc<AppState>>,
+    Path(p): Path<BatchFilePath>,
+) -> Response {
+    let mut store = state.uploads.write().await;
+    if store.get(&p.batch_id).is_none() {
+        return err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        );
+    }
+    if store.remove_doc(&p.batch_id, &p.file_id) {
+        let files = store.batch_manifest(&p.batch_id).unwrap_or_default();
+        Json(manifest_json(&p.batch_id, files)).into_response()
+    } else {
+        err(StatusCode::NOT_FOUND, "Document introuvable dans le batch.")
+    }
+}
+
+/// Annule/purge un batch de staging complet.
+async fn delete_batch(
+    State(state): State<Arc<AppState>>,
+    Path(batch_id): Path<String>,
+) -> Response {
+    let mut store = state.uploads.write().await;
+    if store.remove_batch(&batch_id) {
+        Json(json!({ "ok": true, "removed": batch_id })).into_response()
+    } else {
+        err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        )
+    }
+}
+
+/// Ingère les documents restants d'un batch dans une collection Qdrant, puis
+/// purge le batch (dépôt final durable = Qdrant).
+async fn batch_ingest(
+    State(state): State<Arc<AppState>>,
+    Path(batch_id): Path<String>,
+    Json(req): Json<BatchIngestReq>,
+) -> Response {
+    let collection_name = req.collection_id.trim().to_string();
+    if collection_name.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "collection_id manquant");
+    }
+    let chunk_size = req.chunk_size.unwrap_or(2048);
+    let chunk_overlap = req.chunk_overlap.unwrap_or(0);
+
+    // Credentials + droit d'écriture (même logique que /api/ingestion/upload).
+    let creds = state.credentials.read().await.clone();
+    let user_email = creds.user_email.clone().unwrap_or_default();
+    let can_write = state
+        .db
+        .get_collection_meta(collection_name.clone())
+        .await
+        .ok()
+        .flatten()
+        .map(|m| m.owner_id == user_email || m.owner_id.is_empty() || m.owner_id == "unknown")
+        .unwrap_or(true);
+    if !can_write {
+        return err(
+            StatusCode::FORBIDDEN,
+            "Accès en écriture refusé : seul le propriétaire peut ajouter des documents.",
+        );
+    }
+
+    // Snapshot des docs du batch (travail hors verrou : ingestion longue).
+    let snapshot: Option<Vec<staged::StagedDoc>> = {
+        let store = state.uploads.read().await;
+        store
+            .get(&batch_id)
+            .map(|b| b.docs.values().cloned().collect())
+    };
+    let Some(docs) = snapshot else {
+        return err(
+            StatusCode::NOT_FOUND,
+            "Batch de staging introuvable ou expiré.",
+        );
+    };
+
+    let albert_endpoint = creds.endpoint.clone();
+    let bearer = creds.bearer.clone();
+    let qdrant_url = creds.qdrant_url.clone();
+    let admin_key = resolve_admin_key(&creds);
+
+    let mut files: Vec<Value> = Vec::new();
+    let mut ok_count = 0usize;
+    let mut err_count = 0usize;
+
+    for doc in docs {
+        let doc_name = doc.name.clone();
+        let ext = doc.ext.clone();
+        let path = doc.path.clone();
+
+        // Lecture du spool (≤ plafond par entrée) dans un thread bloquant.
+        let bytes = match tokio::task::spawn_blocking(move || std::fs::read(&path)).await {
+            Ok(Ok(b)) => b,
+            Ok(Err(e)) => {
+                files.push(json!({"name": doc_name, "ok": false, "error": format!("Lecture du spool : {e}")}));
+                err_count += 1;
+                continue;
+            }
+            Err(_) => {
+                files.push(json!({"name": doc_name, "ok": false, "error": "Lecture du spool interrompue."}));
+                err_count += 1;
+                continue;
+            }
+        };
+
+        let doc_id = uuid::Uuid::new_v4().to_string();
+        match rag::ingest_document(
+            &collection_name,
+            &doc_id,
+            &doc_name,
+            &bytes,
+            &ext,
+            chunk_size,
+            chunk_overlap,
+            &albert_endpoint,
+            &bearer,
+            admin_key.as_deref(),
+            Some(&[QdrantCollectionAccess {
+                collection: collection_name.clone(),
+                access: "rw".to_string(),
+            }]),
+            qdrant_url.as_deref(),
+        )
+        .await
+        {
+            Ok(n) => {
+                files.push(json!({"name": doc_name, "ok": true, "id": doc_id, "chunks": n}));
+                ok_count += 1;
+            }
+            Err(e) => {
+                files.push(json!({"name": doc_name, "ok": false, "error": e}));
+                err_count += 1;
+            }
+        }
+    }
+
+    // Purge du batch (les fichiers spoolés sont supprimés du disque).
+    {
+        let mut store = state.uploads.write().await;
+        store.remove_batch(&batch_id);
+    }
+
+    Json(json!({
+        "ok": ok_count > 0,
+        "collection_id": collection_name,
+        "files": files,
+        "ok_count": ok_count,
+        "err_count": err_count,
+    }))
+    .into_response()
 }
 
 // ── Ingestion ─────────────────────────────────────────────────────────────────

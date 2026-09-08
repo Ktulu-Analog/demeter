@@ -16,6 +16,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { API_BASE } from '../constants';
 import { useDialog } from '../DialogContext';
+import { IngestionDocsModal } from './IngestionDocsModal';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +55,7 @@ export function IngestionModal({ settings, spaces, onClose, onSave }: IngestionM
   const [collections, setCollections]               = useState<Collection[]>([]);
   const [loadingCollections, setLoadingCollections] = useState(false);
   const [qdrantStatus, setQdrantStatus]             = useState<'checking' | 'ok' | 'error'>('checking');
+  const [showDocs, setShowDocs]                     = useState(false);
 
   // Ping Qdrant au montage et toutes les 30s
   useEffect(() => {
@@ -159,6 +161,11 @@ export function IngestionModal({ settings, spaces, onClose, onSave }: IngestionM
     ? collections.find(c => c.name === assignedColName) ?? null
     : null;
 
+  // Vue dédiée « Ingérer des documents » (archives .zip/.7z + staging + suppression).
+  if (showDocs) {
+    return <IngestionDocsModal onClose={() => setShowDocs(false)} />;
+  }
+
   return (
     <div className="modal-overlay">
       <div className="modal ingestion-modal">
@@ -176,6 +183,7 @@ export function IngestionModal({ settings, spaces, onClose, onSave }: IngestionM
               </span>
             </span>
           </div>
+          <button className="icon-btn" onClick={() => setShowDocs(true)} title="Ingérer des documents (ZIP/7z, PDF, DOCX…)">📥</button>
           <button className="icon-btn" onClick={onClose} title="Fermer sans enregistrer">✕</button>
         </div>
 
