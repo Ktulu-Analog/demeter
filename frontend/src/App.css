@@ -442,6 +442,30 @@
   border-color: var(--green-mid);
 }
 
+/* ── Bouton mode jour/nuit dans la topbar ── */
+.theme-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-medium);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.13s, color 0.13s, border-color 0.13s, transform 0.13s;
+}
+.theme-toggle-btn:hover {
+  background: var(--green-light);
+  color: var(--green-dark);
+  border-color: var(--green-mid);
+}
+.theme-toggle-btn:active { transform: scale(0.92); }
+.theme-toggle-btn svg { flex-shrink: 0; }
+
 /* ── Home button ── */
 .home-btn {
   display: flex;

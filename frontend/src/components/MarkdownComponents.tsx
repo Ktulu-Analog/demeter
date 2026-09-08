@@ -41,10 +41,17 @@ import * as echarts from 'echarts';
 import mermaid from 'mermaid';
 
 // ── Mermaid initialization (once) ────────────────────────────────────────────
-// ── Mermaid theme — synchronisé avec les variables CSS de l'app ─────────────
+// ── Mermaid theme — synchronisé avec le mode jour/nuit de l'app ─────────────
 // Light  : bg-primary=#ffffff  text-primary=#111111  border-medium=rgba(0,0,0,0.16)
 // Dark   : bg-primary=#1a1a1a  text-primary=#f0f0f0  border-medium=rgba(255,255,255,0.14)
-const _darkMq = window.matchMedia('(prefers-color-scheme: dark)');
+// Le thème courant est porté par <html data-theme="light|dark"> (posé par
+// App.tsx et index.html). En l'absence d'attribut, on retombe sur l'OS.
+function _isDarkTheme(): boolean {
+  const t = document.documentElement.dataset.theme;
+  if (t === 'dark') return true;
+  if (t === 'light') return false;
+  return window.matchMedia('(prefers-color-scheme: dark)').matches;
+}
 function _getMermaidThemeVars(dark: boolean) {
   return dark
     ? {
@@ -144,24 +151,22 @@ function _getMermaidThemeVars(dark: boolean) {
         todayLineColor:          '#111111',  // text-primary
       };
 }
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'base',
-  securityLevel: 'loose',
-  suppressErrorRendering: true,
-  themeVariables: _getMermaidThemeVars(_darkMq.matches),
-});
-
-// Re-init Mermaid whenever the OS color-scheme flips
-_darkMq.addEventListener('change', (e) => {
+function _initMermaidTheme() {
   mermaid.initialize({
     startOnLoad: false,
     theme: 'base',
     securityLevel: 'loose',
     suppressErrorRendering: true,
-    themeVariables: _getMermaidThemeVars(e.matches),
+    themeVariables: _getMermaidThemeVars(_isDarkTheme()),
   });
-});
+}
+_initMermaidTheme();
+
+// Re-synchronise Mermaid quand le mode jour/nuit change (attribut data-theme)
+new MutationObserver(() => _initMermaidTheme()).observe(
+  document.documentElement,
+  { attributes: true, attributeFilter: ['data-theme'] }
+);
 
 let _mermaidRenderCounter = 0;
 
