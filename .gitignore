@@ -56,3 +56,5 @@ logs/
 # ── Couverture de tests ───────────────────────────────────────────────────────
 coverage/
 lcov.info
+
+mcp-servers/
