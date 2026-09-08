@@ -5213,3 +5213,63 @@ button.mcp-pill-header:hover {
   padding: 5px 10px;
   font-size: 12px;
 }
+
+/* ── Ingestion de documents : upload / staging ─────────────────────────── */
+.ingestion-docs-modal .modal-body { max-height: 60vh; overflow-y: auto; }
+
+.im-col-select {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(127, 127, 127, 0.35);
+  background: rgba(127, 127, 127, 0.06);
+  color: inherit;
+  font-size: 13px;
+}
+
+.im-picker {
+  margin-top: 8px;
+  padding: 22px 12px;
+  border: 1.5px dashed rgba(127, 127, 127, 0.45);
+  border-radius: 10px;
+  text-align: center;
+  font-size: 13px;
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.im-picker:hover { border-color: #3b82f6; background: rgba(59, 130, 246, 0.06); }
+
+.im-staging { margin-top: 10px; border: 1px solid rgba(127, 127, 127, 0.3); border-radius: 10px; padding: 10px; }
+.im-staging-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.im-staging-head strong { font-size: 13px; }
+
+.im-mini-btn {
+  border: 1px solid rgba(127, 127, 127, 0.4);
+  background: rgba(127, 127, 127, 0.08);
+  color: inherit;
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 6px;
+}
+.im-mini-btn--primary { border-color: #3b82f6; background: #3b82f6; color: #fff; }
+.im-mini-btn--danger  { border-color: #dc2626; background: #dc2626; color: #fff; }
+.im-mini-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.im-staging-list { max-height: 180px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+.im-staged-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: 6px;
+  background: rgba(127, 127, 127, 0.07);
+}
+.im-staged-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.im-staged-meta { font-size: 11px; opacity: 0.65; white-space: nowrap; }
+.im-staged-del { background: none; border: none; color: inherit; opacity: 0.6; cursor: pointer; font-size: 13px; padding: 0 4px; }
+.im-staged-del:hover { opacity: 1; color: #dc2626; }
+
+.im-staging-errors { margin-top: 8px; color: #dc2626; font-size: 12px; white-space: pre-wrap; }
+
+.im-doc-name { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.im-doc-meta { font-size: 11px; opacity: 0.65; margin-left: 8px; }

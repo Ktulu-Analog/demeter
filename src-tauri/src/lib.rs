@@ -17,6 +17,7 @@ use tauri::Manager;
 use tracing::info;
 
 mod api;
+mod archive;
 mod config;
 mod db;
 mod extract;
@@ -24,8 +25,11 @@ mod mcp;
 mod mcp_pack;
 mod mcp_stdio;
 mod models;
+#[cfg(target_os = "windows")]
+mod ocr_windows;
 mod rag;
 mod spaces;
+mod staged;
 
 pub use api::{AppState, Credentials};
 pub use db::Database;
@@ -308,6 +312,28 @@ pub fn run() {
             });
 
             let (router, app_state) = api::build_router(db, prompts_path_clone, official_mcp_dir);
+
+            // ── GC des batchs de staging (uploads d'archives) ────────────────
+            // Purge périodique des batchs inactifs (VFS éphémère). Les TempDir
+            // sont détruits (RAII) → les fichiers spoolés sont supprimés du disque.
+            {
+                let uploads_store = app_state.uploads.clone();
+                tauri::async_runtime::spawn(async move {
+                    let ttl = config::upload_batch_ttl();
+                    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+                    ticker.tick().await; // premier tick immédiat ignoré
+                    loop {
+                        ticker.tick().await;
+                        let purged = {
+                            let mut store = uploads_store.write().await;
+                            store.purge_expired(ttl)
+                        };
+                        if purged > 0 {
+                            info!("[staging] {purged} batch(s) expiré(s) purgé(s)");
+                        }
+                    }
+                });
+            }
 
             // Arrêt propre des process MCP stdio quand la fenêtre se ferme.
             if let Some(window) = app.get_webview_window("main") {

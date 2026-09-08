@@ -32,7 +32,7 @@ import { IngestionModal } from './components/IngestionModal';
 import { AudioTranscriptionModal } from './components/AudioTranscriptionModal';
 import { CompareModeView } from './components/CompareMode';
 import './CompareMode.css';
-import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
+import { API_BASE, IMAGE_MIME, IMAGE_EXTS, DOC_EXTS, ARCHIVE_EXTS, MIME_TO_EXT, HISTORY_ITEMS } from './constants';
 
 const DEFAULT_EXTRA_MODELS = [
   'openai/gpt-oss-120b',
@@ -507,7 +507,7 @@ function AppInner() {
     e.preventDefault(); setInputDragOver(false);
     const files      = Array.from(e.dataTransfer.files);
     const imageFiles = files.filter(f => IMAGE_MIME.includes(f.type));
-    const docFiles   = files.filter(f => DOC_EXTS.includes(f.name.toLowerCase().split('.').pop() || ''));
+    const docFiles   = files.filter(f => [...DOC_EXTS, ...ARCHIVE_EXTS].includes(f.name.toLowerCase().split('.').pop() || ''));
     if (imageFiles.length) await addImageAttachments(imageFiles);
     if (docFiles.length) {
       const dt = new DataTransfer(); docFiles.forEach(f => dt.items.add(f));
@@ -520,10 +520,10 @@ function AppInner() {
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (!selectedFiles.length) return;
     const getExt  = (f: File) => f.name.toLowerCase().split('.').pop() || '';
-    const invalid = selectedFiles.filter(f => !([...IMAGE_EXTS, ...DOC_EXTS].includes(getExt(f))));
+    const invalid = selectedFiles.filter(f => !([...IMAGE_EXTS, ...DOC_EXTS, ...ARCHIVE_EXTS].includes(getExt(f))));
     if (invalid.length) { toastFn(`Fichiers non supportés : ${invalid.map(f => f.name).join(', ')}`, 'error'); return; }
     const images = selectedFiles.filter(f => IMAGE_EXTS.includes(getExt(f)));
-    const docs   = selectedFiles.filter(f => DOC_EXTS.includes(getExt(f)));
+    const docs   = selectedFiles.filter(f => [...DOC_EXTS, ...ARCHIVE_EXTS].includes(getExt(f)));
     setExtracting(true);
     try {
       const imageAttachments = await Promise.all(images.map(f => new Promise<Attachment>((resolve, reject) => {
@@ -915,7 +915,7 @@ function AppInner() {
                   <h2 className="welcome-title">{activeSpace ? (activeSpace as { label?: string }).label : 'Bonjour\u00a0!'}</h2>
                   <p className="welcome-sub">
                     {activeSpace ? 'Espace dédié — posez vos questions ou choisissez une suggestion ci-dessous.' : 'Votre assistant RH intelligent.'}<br />
-                    <span className="welcome-attach-hint">📎 Joignez un PDF, Word ou image — ou collez une image directement (Ctrl+V).</span>
+                    <span className="welcome-attach-hint">📎 Joignez un PDF, Word, ZIP/7z ou une image — ou collez une image directement (Ctrl+V). Les archives sont décompressées en documents.</span>
                   </p>
                   <div className="suggestion-grid">
                     {loadingSpaces
@@ -952,7 +952,7 @@ function AppInner() {
             )}
 
             <div className="input-zone">
-              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.gif,.webp" style={{ display: 'none' }} multiple onChange={handleFileChange} />
+              <input ref={fileInputRef} type="file" accept=".pdf,.docx,.doc,.txt,.md,.csv,.zip,.7z,.png,.jpg,.jpeg,.gif,.webp" style={{ display: 'none' }} multiple onChange={handleFileChange} />
               <div className={`input-box ${loading ? 'input-box--loading' : ''} ${inputDragOver ? 'input-box--dragover' : ''}`} onDragOver={handleInputDragOver} onDragLeave={handleInputDragLeave} onDrop={handleInputDrop}>
                 {inputDragOver && (
                   <div className="input-drop-overlay">

@@ -64,6 +64,23 @@ jsonwebtoken = { version = "10", default-features = false, features = ["rust_cry
 pdf-extract = "0.10"
 zip = "2"
 sha2 = "0.10"
+
+# Archives / décompression (zip sert déjà aux DOCX et au mcp-pack)
+sevenz-rust2 = "0.22"
+# Mémoire disponible → plafonds adaptatifs des uploads volumineux
+sysinfo = "0.33"
+tempfile = "3"
+
+# OCR natif Windows (Windows.Data.Pdf + Windows.Media.Ocr) — uniquement sur Windows
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Data_Pdf",
+    "Media_Ocr",
+    "Graphics_Imaging",
+    "Storage",
+    "Storage_Streams",
+] }
 quick-xml = { version = "0.36", features = ["serialize"] }
 encoding_rs = "0.8"
 urlencoding = "2"
