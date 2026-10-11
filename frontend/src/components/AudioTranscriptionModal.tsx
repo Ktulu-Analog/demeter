@@ -222,9 +222,7 @@ export function AudioTranscriptionModal({ settings, onClose, onInsert }: AudioTr
   useEffect(() => {
     if (!settings.endpoint || !settings.bearer) return;
     setLoadingModels(true);
-    fetch(`${API_BASE}/api-proxy/api/models?endpoint=${encodeURIComponent(settings.endpoint)}`, {
-      headers: { 'X-Albert-Token': settings.bearer },
-    })
+    fetch(`${API_BASE}/api-proxy/api/models`)
       .then(r => (r.ok ? r.json() : null))
       .then((data: { data?: AlbertModel[] } | null) => {
         const asr = (data?.data || []).filter(m => m.type === 'automatic-speech-recognition').map(m => m.id);
@@ -270,8 +268,8 @@ export function AudioTranscriptionModal({ settings, onClose, onInsert }: AudioTr
     if (language.trim()) form.append('language', language.trim());
 
     const res = await fetch(
-      `${API_BASE}/api-proxy/api/audio/transcriptions?endpoint=${encodeURIComponent(settings.endpoint)}`,
-      { method: 'POST', headers: { 'X-Albert-Token': settings.bearer }, body: form },
+      `${API_BASE}/api-proxy/api/audio/transcriptions`,
+      { method: 'POST', body: form },
     );
 
     const data = await res.json().catch(() => ({}));

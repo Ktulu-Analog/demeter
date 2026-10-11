@@ -1,0 +1,48 @@
+name: Audit des dépendances
+
+# D-23 : détecte les vulnérabilités connues des dépendances, sans attendre une
+# modification du code. Hebdomadaire, à la demande, et à chaque changement des
+# fichiers de dépendances.
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - 'src-tauri/.cargo/audit.toml'
+      - 'frontend/package.json'
+      - 'frontend/package-lock.json'
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    name: npm audit (production)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 22
+      # Échoue sur « high » et « critical » ; les « low » connues sont suivies à part.
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: frontend
+
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+      - name: Installer cargo-audit
+        run: cargo install cargo-audit --locked
+      # Échoue sur toute VULNÉRABILITÉ. Les avertissements (crates non maintenues,
+      # transitives via Tauri) sont affichés ; les exceptions justifiées sont
+      # listées dans src-tauri/.cargo/audit.toml.
+      - run: cargo audit
+        working-directory: src-tauri

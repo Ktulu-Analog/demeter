@@ -1,0 +1,15 @@
+{
+  "id": "mcp-legifrance",
+  "name": "Légifrance",
+  "description": "Codes, lois et règlements, Journal Officiel, conventions collectives, jurisprudence administrative et judiciaire, via l'API Légifrance (PISTE).",
+  "bin": {
+    "linux-x64": "bin/mcp-legifrance-linux-x64",
+    "windows-x64": "bin/mcp-legifrance-windows-x64.exe"
+  },
+  "args": ["--transport", "stdio"],
+  "params": [
+    { "key": "LEGIFRANCE_CLIENT_ID", "label": "Client ID PISTE", "required": false, "help": "Identifiants obtenus sur https://piste.gouv.fr (application Légifrance). Sans eux, le serveur démarre quand même mais affiche un avertissement et les appels à l'API échoueront." },
+    { "key": "LEGIFRANCE_CLIENT_SECRET", "label": "Client Secret PISTE", "required": false, "secret": true },
+    { "key": "LEGIFRANCE_ENV", "label": "Environnement PISTE", "required": false, "default": "production", "help": "Mettre \"sandbox\" pour basculer sur l'environnement de test PISTE." }
+  ]
+}

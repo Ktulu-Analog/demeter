@@ -166,10 +166,7 @@ fn qdrant_auth(
         }
         Some(ref key) if is_jwt(key) => {
             // JWT pré-signé (token utilisateur) → passer directement à Qdrant
-            tracing::info!(
-                "[TRACE qdrant_auth] JWT utilisateur → header api-key prefix={:?}",
-                &key[..key.len().min(20)]
-            );
+            tracing::debug!("[qdrant_auth] JWT utilisateur transmis");
             rb.header("api-key", key.clone())
         }
         Some(ref ak) => match accessible_collections {
@@ -204,7 +201,7 @@ pub fn generate_qdrant_jwt_with_ttl(
 ) -> Result<String, jsonwebtoken::errors::Error> {
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 
-    let exp = chrono::Utc::now().timestamp() + ttl_seconds;
+    let exp = chrono::Utc::now().timestamp().saturating_add(ttl_seconds);
     let cols_map: std::collections::HashMap<String, QdrantCollectionRights> = collections
         .iter()
         .map(|c| {
@@ -310,6 +307,31 @@ pub async fn embed(text: &str, albert_endpoint: &str, bearer: &str) -> Option<Ve
 
 // ── Qdrant : gestion des collections ─────────────────────────────────────────
 
+// ── Noms de collection (D-16) ────────────────────────────────────────────────
+
+/// Un nom de collection valide : 1 à 128 caractères, sans caractère de contrôle,
+/// sans « / \\ ? # % », et différent de « . » et « .. ».
+pub fn is_valid_collection_name(name: &str) -> bool {
+    let n = name.trim();
+    !n.is_empty()
+        && n.chars().count() <= 128
+        && n != "."
+        && n != ".."
+        && !n
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '\\' | '?' | '#' | '%'))
+}
+
+/// Segment d'URL sûr pour un nom de collection : encodé, et neutralisé si le nom
+/// est invalide (Qdrant répondra alors 404 au lieu d'atteindre un autre endpoint).
+fn col(name: &str) -> String {
+    if is_valid_collection_name(name) {
+        urlencoding::encode(name.trim()).into_owned()
+    } else {
+        "_invalid_collection_name_".to_string()
+    }
+}
+
 /// Vérifie si une collection Qdrant existe.
 pub async fn collection_exists(
     name: &str,
@@ -317,7 +339,7 @@ pub async fn collection_exists(
     qdrant_url: Option<&str>,
 ) -> bool {
     let client = qdrant_client();
-    let url = format!("{}/collections/{}", qdrant_base_url(qdrant_url), name);
+    let url = format!("{}/collections/{}", qdrant_base_url(qdrant_url), col(name));
     let req = qdrant_auth(client.get(&url), admin_key, None);
     match req.send().await {
         Ok(r) => r.status().is_success(),
@@ -335,7 +357,7 @@ pub async fn create_collection(
     qdrant_url: Option<&str>,
 ) -> Result<(), String> {
     let client = qdrant_client();
-    let url = format!("{}/collections/{}", qdrant_base_url(qdrant_url), name);
+    let url = format!("{}/collections/{}", qdrant_base_url(qdrant_url), col(name));
     let dim = config::embedding_dim();
 
     let body = json!({
@@ -365,7 +387,7 @@ pub async fn delete_collection(
     qdrant_url: Option<&str>,
 ) -> Result<(), String> {
     let client = qdrant_client();
-    let url = format!("{}/collections/{}", qdrant_base_url(qdrant_url), name);
+    let url = format!("{}/collections/{}", qdrant_base_url(qdrant_url), col(name));
     let req = qdrant_auth(client.delete(&url), admin_key, None);
     let resp = req.send().await.map_err(|e| e.to_string())?;
     if resp.status().is_success() {
@@ -389,7 +411,7 @@ pub async fn rename_collection(
     let scroll_url = format!(
         "{}/collections/{}/points/scroll",
         qdrant_base_url(qdrant_url),
-        old_name
+        col(old_name)
     );
     let body = json!({ "limit": 10000, "with_payload": true, "with_vector": true });
     let req = qdrant_auth(client.post(&scroll_url).json(&body), admin_key, None);
@@ -409,7 +431,7 @@ pub async fn rename_collection(
         let upsert_url = format!(
             "{}/collections/{}/points",
             qdrant_base_url(qdrant_url),
-            new_name
+            col(new_name)
         );
         let body = json!({ "points": points });
         let req = qdrant_auth(client.put(&upsert_url).json(&body), admin_key, None);
@@ -454,7 +476,7 @@ pub async fn list_documents(
     let url = format!(
         "{}/collections/{}/points/scroll",
         qdrant_base_url(qdrant_url),
-        collection_name
+        col(collection_name)
     );
     let body = json!({ "limit": 10000, "with_payload": true, "with_vector": false });
     let req = qdrant_auth(client.post(&url).json(&body), admin_key, None);
@@ -502,7 +524,7 @@ pub async fn delete_document(
     let url = format!(
         "{}/collections/{}/points/delete",
         qdrant_base_url(qdrant_url),
-        collection_name
+        col(collection_name)
     );
     let body = json!({
         "filter": {
@@ -531,6 +553,8 @@ fn chunk_text(text: &str, size: usize, overlap: usize) -> Vec<(usize, String)> {
     if total == 0 {
         return vec![];
     }
+    // D-17 : size ≥ 1 et step ≥ 1 → la boucle progresse toujours (plus de boucle infinie)
+    let size = size.max(1);
     let step = if size > overlap { size - overlap } else { size };
     let mut chunks = Vec::new();
     let mut start = 0usize;
@@ -564,7 +588,8 @@ pub async fn ingest_document(
     accessible_collections: Option<&[QdrantCollectionAccess]>,
     qdrant_url: Option<&str>,
 ) -> Result<usize, String> {
-    let text = crate::extract::extract_text(content, ext)
+    let text = crate::extract::extract_text_async(content.to_vec(), ext.to_string())
+        .await
         .map_err(|e| format!("Extraction échouée : {}", e))?;
 
     let raw_chunks = chunk_text(&text, chunk_size, chunk_overlap);
@@ -590,7 +615,7 @@ pub async fn ingest_document(
     let upsert_url = format!(
         "{}/collections/{}/points",
         qdrant_base_url(qdrant_url),
-        collection_name
+        col(collection_name)
     );
     let mut inserted = 0usize;
 
@@ -759,10 +784,10 @@ pub async fn search_chunks(
     let url = format!(
         "{}/collections/{}/points/search",
         qdrant_base_url(qdrant_url),
-        collection_name
+        col(collection_name)
     );
-    tracing::info!(
-        "[TRACE search_chunks] url={} admin_key={} accessible_collections={:?}",
+    tracing::debug!(
+        "[search_chunks] url={} admin_key={} accessible_collections={:?}",
         url,
         admin_key
             .map(|k| if k.starts_with("eyJ") { "JWT" } else { "raw" })
@@ -1088,5 +1113,48 @@ pub fn build_system_with_rag(base_system: &str, context: Option<&str>) -> String
             "══════════════════════════════════════════════"
             )
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn noms_de_collection_valides_et_invalides() {
+        for ok in ["rh", "Code du travail", "dossier_2026-01", "é.docs"] {
+            assert!(is_valid_collection_name(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            " ",
+            ".",
+            "..",
+            "a/b",
+            "../x",
+            "a\\b",
+            "a?b",
+            "a#b",
+            "a%2Fb",
+            "x\ny",
+            &"a".repeat(129),
+        ] {
+            assert!(!is_valid_collection_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn segment_url_neutralise_les_noms_dangereux() {
+        assert_eq!(col("a b"), "a%20b");
+        assert_eq!(col("../snapshots"), "_invalid_collection_name_");
+        assert_eq!(col(".."), "_invalid_collection_name_");
+    }
+
+    #[test]
+    fn chunk_text_taille_zero_ne_boucle_pas() {
+        let chunks = chunk_text("abcdef", 0, 0);
+        assert!(!chunks.is_empty() && chunks.len() <= 6);
+        let chunks = chunk_text("abcdef", 3, 5); // overlap >= size
+        assert_eq!(chunks.len(), 2);
     }
 }

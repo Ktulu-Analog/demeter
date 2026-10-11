@@ -51,7 +51,7 @@ fn default_icon() -> String {
 
 pub fn load_spaces(path: &Path) -> Result<Vec<SpaceItem>> {
     let content = std::fs::read_to_string(path)?;
-    let raw: YamlSpaces = serde_yaml::from_str(&content)?;
+    let raw: YamlSpaces = serde_norway::from_str(&content)?;
 
     let spaces = raw
         .spaces
@@ -122,7 +122,7 @@ pub fn save_spaces(path: &Path, spaces: Vec<SpaceItem>) -> Result<()> {
             .collect(),
     };
 
-    let yml_body = serde_yaml::to_string(&raw)?;
+    let yml_body = serde_norway::to_string(&raw)?;
     std::fs::write(path, format!("{}{}", header, yml_body))?;
     Ok(())
 }

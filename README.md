@@ -36,38 +36,6 @@ via n'importe quelle API compatible OpenAI (Albert API, OpenAI, Mistral, Ollama�
 
 ---
 
-## Architecture
-
-```
-demeter/
-├── frontend/                   ← React 18 + TypeScript + Vite
-│   └── src/
-│       ├── App.tsx             ← UI principale & gestion de l'état
-│       ├── DialogContext.tsx   ← Contexte des dialogues
-│       ├── components/
-│       │   ├── MarkdownComponents.tsx   ← Rendu Markdown + ECharts + Mermaid + SVG
-│       │   ├── IngestionModal.tsx       ← Interface RAG (Qdrant)
-│       │   ├── AudioTranscriptionModal.tsx ← Transcription audio (diarization, synthèse, export Word)
-│       │   ├── ArtifactsPanel.tsx       ← Panneau Word/artefacts
-│       │   ├── PromptsEditorModal.tsx   ← Éditeur d'espaces & prompts
-│       │   └── Message.tsx             ← Rendu d'un message
-│       ├── hooks/              ← Hooks React (streaming, MCP…)
-│       └── utils/              ← docx, text, mermaid-sanitizer, artifacts, audioChunking, speakerReconciliation
-│
-└── src-tauri/                  ← Backend Rust + config Tauri
-    └── src/
-        ├── api.rs              ← Endpoints Axum (chat, RAG, MCP, search…)
-        ├── db.rs               ← SQLite via tokio-rusqlite
-        ├── models.rs           ← Types Serde (Chat, Conversation, Chunk…)
-        ├── rag.rs              ← Pipeline RAG Qdrant (retrieve → rerank → inject)
-        ├── mcp.rs              ← Client MCP HTTP Streamable
-        ├── mcp_stdio.rs        ← Client MCP stdio (serveurs lancés en sous-processus)
-        ├── mcp_pack.rs         ← Téléchargement/installation du pack MCP officiel
-        ├── extract.rs          ← Extraction texte PDF (lopdf) et DOCX (zip+XML)
-        ├── spaces.rs           ← Lecture/écriture prompts.yml
-        └── lib.rs              ← Setup Tauri + démarrage serveur HTTP
-```
-
 ### Stack technique
 
 | Couche | Technologie |
@@ -137,7 +105,7 @@ sudo apt update && sudo apt install -y \
 ## Démarrage rapide
 
 ```bash
-git clone https://github.com/<votre-org>/demeter.git
+git clone https://github.com/Ktulu-Analog/demeter.git
 cd demeter
 
 cd frontend && npm install && cd ..

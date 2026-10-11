@@ -1,0 +1,11 @@
+{
+  "id": "mcp-system",
+  "name": "Système de fichiers",
+  "description": "Accès en lecture/écriture au système de fichiers local (répertoire $HOME), avec restrictions sur les chemins et fichiers sensibles.",
+  "bin": {
+    "linux-x64": "bin/mcp-system-linux-x64",
+    "windows-x64": "bin/mcp-system-windows-x64.exe"
+  },
+  "args": ["--transport", "stdio"],
+  "params": []
+}

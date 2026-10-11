@@ -937,6 +937,19 @@
   margin: 8px 0;
 }
 
+.md-img-load {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.md-img-load:hover:not(:disabled) { border-color: var(--accent, #6c8cff); }
+.md-img-load:disabled { opacity: 0.6; cursor: default; }
+.md-img-err { color: #d9534f; font-size: 11.5px; }
+
 /* ── Word block placeholder (dans le chat) ── */
 .word-block-placeholder {
   display: inline-flex;

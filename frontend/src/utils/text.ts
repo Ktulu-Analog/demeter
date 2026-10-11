@@ -40,7 +40,8 @@ export function normalizeHeadings(text: string): string {
 }
 
 /**
- * Nettoie le code ECharts généré par le LLM pour le rendre évaluable via new Function().
+ * Nettoie le code ECharts généré par le LLM (commentaires, apostrophes, virgules
+ * finales…) avant analyse par `parseEChartsOption`. Ne l'exécute JAMAIS.
  */
 export function cleanEChartsCode(src: string): string {
   src = (src || '').trim();
@@ -93,6 +94,138 @@ export function cleanEChartsCode(src: string): string {
   }
   out = out.replace(/(?<=[[\],]\s*)\?(?=\s*[,\]])/g, 'null');
   return out.replace(/,(\s*[}\]])/g, '$1');
+}
+
+/**
+ * Analyse le texte d'un bloc ```echarts SANS jamais l'exécuter (constat D-04).
+ *
+ * Remplace `new Function('return (' + code + ')')`, qui exécutait n'importe quel
+ * JavaScript produit par le LLM (donc par un contenu piégé). Le prompt impose du
+ * JSON strict ; on accepte en plus, par tolérance, les clés sans guillemets, les
+ * chaînes entre apostrophes ou backticks (sans interpolation), `undefined`,
+ * `NaN` et `Infinity`. Toute autre expression (fonction, appel, variable,
+ * opérateur…) est refusée avec une erreur explicite.
+ */
+export function parseEChartsOption(src: string): Record<string, unknown> {
+  const text = cleanEChartsCode(src);
+  const MAX_DEPTH = 64;
+  let i = 0;
+
+  const fail = (msg: string): never => {
+    throw new Error(`${msg} (position ${i})`);
+  };
+  const ws = () => { while (i < text.length && /\s/.test(text[i])) i++; };
+
+  const parseString = (): string => {
+    const q = text[i++];
+    let out = '';
+    while (i < text.length) {
+      const c = text[i++];
+      if (c === q) return out;
+      if (c === '\\') {
+        const e = text[i++];
+        switch (e) {
+          case 'n': out += '\n'; break;
+          case 'r': out += '\r'; break;
+          case 't': out += '\t'; break;
+          case 'b': out += '\b'; break;
+          case 'f': out += '\f'; break;
+          case 'v': out += '\v'; break;
+          case '0': out += '\0'; break;
+          case '\n': break; // continuation de ligne
+          case 'u': {
+            const m = /^(?:\{([0-9a-fA-F]{1,6})\}|([0-9a-fA-F]{4}))/.exec(text.slice(i, i + 8));
+            if (!m) return fail('Séquence \\u invalide');
+            out += String.fromCodePoint(parseInt(m[1] ?? m[2], 16));
+            i += m[0].length;
+            break;
+          }
+          case 'x': {
+            const m = /^[0-9a-fA-F]{2}/.exec(text.slice(i, i + 2));
+            if (!m) return fail('Séquence \\x invalide');
+            out += String.fromCharCode(parseInt(m[0], 16));
+            i += 2;
+            break;
+          }
+          default: out += e ?? '';
+        }
+        continue;
+      }
+      if (q === '`' && c === '$' && text[i] === '{') return fail('Interpolation ${…} non supportée');
+      out += c;
+    }
+    return fail('Chaîne non terminée');
+  };
+
+  const parseValue = (depth: number): unknown => {
+    if (depth > MAX_DEPTH) return fail('Imbrication trop profonde');
+    ws();
+    const c = text[i];
+    if (c === '{') {
+      i++;
+      const obj: Record<string, unknown> = {};
+      ws();
+      if (text[i] === '}') { i++; return obj; }
+      for (;;) {
+        ws();
+        let key: string;
+        if (text[i] === '"' || text[i] === '`') key = parseString();
+        else {
+          const m = /^[A-Za-z_$][\w$]*|^-?\d+(?:\.\d+)?/.exec(text.slice(i));
+          if (!m) return fail('Clé invalide');
+          key = m[0];
+          i += key.length;
+        }
+        ws();
+        if (text[i++] !== ':') return fail("':' attendu");
+        const v = parseValue(depth + 1);
+        // Jamais de clé susceptible de polluer le prototype.
+        if (key !== '__proto__' && key !== 'constructor' && key !== 'prototype' && v !== undefined) obj[key] = v;
+        ws();
+        if (text[i] === ',') { i++; ws(); if (text[i] === '}') { i++; return obj; } continue; }
+        if (text[i] === '}') { i++; return obj; }
+        return fail("',' ou '}' attendu");
+      }
+    }
+    if (c === '[') {
+      i++;
+      const arr: unknown[] = [];
+      ws();
+      if (text[i] === ']') { i++; return arr; }
+      for (;;) {
+        arr.push(parseValue(depth + 1));
+        ws();
+        if (text[i] === ',') { i++; ws(); if (text[i] === ']') { i++; return arr; } continue; }
+        if (text[i] === ']') { i++; return arr; }
+        return fail("',' ou ']' attendu");
+      }
+    }
+    if (c === '"' || c === '`') return parseString();
+    const num = /^[-+]?(?:0[xX][0-9a-fA-F]+|(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)/.exec(text.slice(i));
+    if (num) { i += num[0].length; return Number(num[0]); }
+    const word = /^[-+]?[A-Za-z_$][\w$]*/.exec(text.slice(i));
+    if (word) {
+      const w = word[0];
+      const bare = w.replace(/^[-+]/, '');
+      const neg = w.startsWith('-') ? -1 : 1;
+      if (bare === 'true' && w === bare) { i += w.length; return true; }
+      if (bare === 'false' && w === bare) { i += w.length; return false; }
+      if (bare === 'null' && w === bare) { i += w.length; return null; }
+      if (bare === 'undefined' && w === bare) { i += w.length; return undefined; }
+      if (bare === 'NaN') { i += w.length; return NaN; }
+      if (bare === 'Infinity') { i += w.length; return neg * Infinity; }
+      return fail(`Expression non supportée « ${w} » (seul du JSON est accepté)`);
+    }
+    return fail(c === undefined ? 'Fin inattendue' : `Caractère inattendu « ${c} »`);
+  };
+
+  const value = parseValue(0);
+  ws();
+  if (i < text.length) fail("Contenu inattendu après l'objet");
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error("Le bloc echarts doit contenir un objet d'options");
+  }
+  return value as Record<string, unknown>;
 }
 
 /**

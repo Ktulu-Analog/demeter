@@ -18,7 +18,7 @@ import {
   Table, TableRow, TableCell, WidthType, BorderStyle,
   AlignmentType, ShadingType, ImageRun,
 } from 'docx';
-import { cleanEChartsCode, mergeEChartsOption } from './text';
+import { parseEChartsOption, mergeEChartsOption } from './text';
 
 const COLOR_H1      = '1a1a2e';
 const COLOR_H2      = '16213e';
@@ -52,9 +52,8 @@ async function renderEChartsToImage(codeContent: string): Promise<Uint8Array> {
   wrapper.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:900px;height:450px;opacity:0;pointer-events:none;';
   document.body.appendChild(wrapper);
   try {
-    const cleaned = cleanEChartsCode(codeContent);
-    // eslint-disable-next-line no-new-func
-    const option  = (new Function(`return (${cleaned})`))();
+    // D-04 : analyse sans exécution (plus de new Function)
+    const option  = parseEChartsOption(codeContent);
     const chart   = echarts.init(wrapper, null, { renderer: 'canvas', width: 900, height: 450 });
     chart.setOption(mergeEChartsOption(option));
     await new Promise<void>(resolve => {

@@ -28,6 +28,118 @@ use tracing::{info, warn};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// ── Garde réseau (D-10) ───────────────────────────────────────────────────────
+// Les serveurs MCP locaux ou de réseau privé restent autorisés (choix produit :
+// MCP maison, ComfyUI…). Sont refusées les cibles qui n'ont aucune raison d'être
+// un serveur MCP : adresses link-local / métadonnées cloud (169.254.0.0/16,
+// fe80::/10, 100.100.100.200, metadata.google.internal), non spécifiées.
+
+/// Taille maximale d'une réponse MCP (les images base64 sont volumineuses).
+const MAX_RESPONSE_BYTES: usize = 25 * 1024 * 1024;
+
+fn is_forbidden_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_link_local() || v4.is_unspecified() || v4.octets() == [100, 100, 100, 200]
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_forbidden_ip(std::net::IpAddr::V4(v4));
+            }
+            v6.is_unspecified() || (v6.segments()[0] & 0xFFC0) == 0xFE80
+        }
+    }
+}
+
+fn is_forbidden_literal_host(host: &str) -> bool {
+    let h = host.trim_start_matches('[').trim_end_matches(']');
+    if h.eq_ignore_ascii_case("metadata.google.internal") {
+        return true;
+    }
+    h.parse::<std::net::IpAddr>()
+        .map(is_forbidden_ip)
+        .unwrap_or(false)
+}
+
+/// Politique de redirection : 5 max, jamais de rétrogradation https → http,
+/// jamais vers une adresse interdite.
+pub fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 5 {
+            return attempt.error("trop de redirections");
+        }
+        let was_https = attempt
+            .previous()
+            .last()
+            .map(|u| u.scheme() == "https")
+            .unwrap_or(false);
+        if was_https && attempt.url().scheme() != "https" {
+            return attempt.error("redirection https vers http refusée");
+        }
+        if attempt
+            .url()
+            .host_str()
+            .map(is_forbidden_literal_host)
+            .unwrap_or(false)
+        {
+            return attempt.error("redirection vers une adresse interdite");
+        }
+        attempt.follow()
+    })
+}
+
+/// Valide la cible d'un appel MCP (schéma, identifiants, adresse, résolution DNS).
+async fn check_target(url: &str) -> Result<(), String> {
+    let u = reqwest::Url::parse(url).map_err(|_| "URL invalide".to_string())?;
+    if !matches!(u.scheme(), "http" | "https") {
+        return Err("schéma non autorisé (http/https uniquement)".into());
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err("identifiants dans l'URL refusés".into());
+    }
+    let host = u.host_str().ok_or_else(|| "URL sans hôte".to_string())?;
+    if is_forbidden_literal_host(host) {
+        return Err("adresse interdite (link-local / métadonnées)".into());
+    }
+    if host
+        .trim_start_matches('[')
+        .parse::<std::net::IpAddr>()
+        .is_err()
+    {
+        let port = u.port_or_known_default().unwrap_or(443);
+        if let Ok(addrs) = tokio::net::lookup_host((host, port)).await {
+            if addrs.into_iter().any(|a| is_forbidden_ip(a.ip())) {
+                return Err("le nom résout vers une adresse interdite".into());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lit le corps d'une réponse en plafonnant sa taille.
+async fn read_capped(mut resp: reqwest::Response) -> Option<Vec<u8>> {
+    if resp
+        .content_length()
+        .map(|l| l as usize > MAX_RESPONSE_BYTES)
+        .unwrap_or(false)
+    {
+        warn!("MCP: réponse trop volumineuse (Content-Length)");
+        return None;
+    }
+    let mut body = Vec::new();
+    while let Ok(Some(chunk)) = resp.chunk().await {
+        if body.len() + chunk.len() > MAX_RESPONSE_BYTES {
+            warn!(
+                "MCP: réponse trop volumineuse (> {} octets)",
+                MAX_RESPONSE_BYTES
+            );
+            return None;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Some(body)
+}
+
 /// Extrait l'origine (scheme + host) d'une URL pour le header Origin.
 /// "https://mcp.data.gouv.fr/mcp" → "https://mcp.data.gouv.fr"
 fn origin_from_url(url: &str) -> String {
@@ -43,6 +155,7 @@ fn origin_from_url(url: &str) -> String {
 async fn parse_sse_stream(resp: reqwest::Response) -> Option<Value> {
     let mut stream = resp.bytes_stream();
     let mut buf = String::new();
+    let mut total = 0usize;
 
     while let Some(chunk) = stream.next().await {
         let bytes = match chunk {
@@ -52,6 +165,11 @@ async fn parse_sse_stream(resp: reqwest::Response) -> Option<Value> {
                 break;
             }
         };
+        total += bytes.len();
+        if total > MAX_RESPONSE_BYTES || buf.len() > MAX_RESPONSE_BYTES {
+            warn!("MCP SSE: flux trop volumineux, abandon");
+            return None;
+        }
         let text = String::from_utf8_lossy(&bytes).to_string();
         buf.push_str(&text);
 
@@ -124,6 +242,11 @@ async fn rpc_post(
     let server_url: &str = server_url.as_str();
     let origin = origin_from_url(server_url);
 
+    if let Err(reason) = check_target(server_url).await {
+        warn!("MCP: cible refusée — {}", reason);
+        return None;
+    }
+
     let resp = match client
         .post(server_url)
         .header("Content-Type", "application/json")
@@ -145,9 +268,6 @@ async fn rpc_post(
                 e.is_builder(),
                 e
             );
-            if let Some(url) = e.url() {
-                warn!("MCP: failed URL = {}", url);
-            }
             return None;
         }
     };
@@ -160,7 +280,13 @@ async fn rpc_post(
             .and_then(|v| v.to_str().ok())
             .unwrap_or("-")
             .to_string();
-        let body_text = resp.text().await.unwrap_or_default();
+        let body_text: String = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(300)
+            .collect();
         warn!(
             "MCP HTTP {} (x-deny-reason: {}) — {}",
             status, deny_reason, body_text
@@ -177,7 +303,8 @@ async fn rpc_post(
 
     if content_type.contains("application/json") {
         // Réponse JSON directe (mode json_response activé)
-        resp.json::<Value>().await.ok()
+        let bytes = read_capped(resp).await?;
+        serde_json::from_slice::<Value>(&bytes).ok()
     } else if content_type.contains("text/event-stream") {
         // Réponse SSE (mode par défaut de FastMCP)
         parse_sse_stream(resp).await
@@ -227,9 +354,6 @@ pub fn mcp_tool_to_openai(tool: &Value, server_url: &str) -> Value {
     let fn_name = format!("mcp__{}__{}", slugify(server_url), tool_name);
 
     // Filet de sécurité : l'API rejette tout nom de fonction > 64 caractères.
-    // Avec SLUG_MAX_LEN=12 ça ne devrait plus arriver, mais si un futur outil
-    // MCP a un nom très long, on préfère le signaler bruyamment dans les logs
-    // plutôt que de laisser l'appel échouer en silence côté API.
     if fn_name.len() > 64 {
         warn!(
             "MCP: nom de fonction '{}' ({} caractères) dépasse la limite de 64 imposée par l'API — \
@@ -347,25 +471,63 @@ pub fn server_slug(url: &str) -> String {
     slugify(url)
 }
 
-// Longueur max du slug serveur dans les noms de fonction `mcp__{slug}__{outil}`.
-//
-// L'API impose un nom de fonction total <= 64 caractères. Avec le préfixe
-// "mcp__" (5) et le séparateur "__" (2), et le plus long nom d'outil connu
-// à ce jour (legifrance_lister_questions_parlementaires, 42 caractères),
-// il reste 64 - 5 - 2 - 42 = 15 caractères disponibles pour le slug.
-// On se limite à 12 pour garder de la marge si des outils plus longs
-// apparaissent, tout en restant suffisamment distinctif entre serveurs.
-const SLUG_MAX_LEN: usize = 12;
+// Slug serveur dans les noms de fonction `mcp__{slug}__{outil}`.
+const SLUG_READABLE_LEN: usize = 6;
+
+fn fnv1a(bytes: &[u8]) -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in bytes {
+        h ^= *b as u32;
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    h
+}
 
 fn slugify(url: &str) -> String {
-    url.trim_start_matches("https://")
+    let id = url.trim();
+    let readable: String = id
+        .trim_start_matches("https://")
         .trim_start_matches("http://")
         .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '_' })
-        .collect::<String>()
-        .trim_matches('_')
-        .to_string()
-        .chars()
-        .take(SLUG_MAX_LEN)
-        .collect()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .take(SLUG_READABLE_LEN)
+        .collect();
+    let readable = if readable.is_empty() {
+        "x".to_string()
+    } else {
+        readable
+    };
+    format!("{}_{:05x}", readable, fnv1a(id.as_bytes()) & 0xF_FFFF)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slugs_distincts_pour_urls_au_meme_debut() {
+        let a = slugify("https://mcp.exemple.fr/a");
+        let b = slugify("https://mcp.exemple.fr/b");
+        assert_ne!(a, b);
+        assert!(a.len() <= 12 && b.len() <= 12);
+        assert!(!a.contains("__") && !b.contains("__"));
+    }
+
+    #[test]
+    fn slug_stdio_et_vide_sans_double_underscore() {
+        assert!(!slugify("stdio:mcp-grist").contains("__"));
+        assert!(!slugify("::").contains("__"));
+    }
+
+    #[test]
+    fn adresses_interdites() {
+        assert!(is_forbidden_literal_host("169.254.169.254"));
+        assert!(is_forbidden_literal_host("[fe80::1]"));
+        assert!(is_forbidden_literal_host("metadata.google.internal"));
+        assert!(is_forbidden_literal_host("100.100.100.200"));
+        assert!(!is_forbidden_literal_host("127.0.0.1"));
+        assert!(!is_forbidden_literal_host("192.168.1.10"));
+        assert!(!is_forbidden_literal_host("mcp.data.gouv.fr"));
+    }
 }

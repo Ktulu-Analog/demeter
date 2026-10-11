@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex};
 use tracing::{info, warn};
@@ -169,12 +169,145 @@ pub fn discover(mcp_dir: &Path) -> Vec<DiscoveredServer> {
 
 /// Résout le chemin absolu du binaire pour la plateforme courante.
 fn resolve_bin(server: &DiscoveredServer) -> Option<PathBuf> {
-    server
-        .manifest
-        .bin
-        .get(&platform_key())
-        .map(|rel| server.dir.join(rel))
+    let rel = server.manifest.bin.get(&platform_key())?;
+    bin_within_dir(&server.dir, rel)
 }
+
+/// D-12 : le binaire doit rester DANS le dossier du serveur. Sont refusés : les
+/// chemins absolus, tout composant « .. » et les liens symboliques qui sortent
+/// du dossier (le manifest vient d'un dossier choisi par l'utilisateur et ne doit
+/// pas pouvoir faire exécuter un binaire arbitraire du système).
+fn bin_within_dir(dir: &Path, rel: &str) -> Option<PathBuf> {
+    use std::path::Component;
+    let rel_path = Path::new(rel);
+    if rel_path.is_absolute()
+        || rel_path
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_) | Component::CurDir))
+    {
+        warn!("MCP stdio: chemin de binaire refusé (hors dossier) : {rel}");
+        return None;
+    }
+    let candidate = dir.join(rel_path);
+    if let (Ok(real_dir), Ok(real_bin)) = (dir.canonicalize(), candidate.canonicalize()) {
+        if !real_bin.starts_with(&real_dir) {
+            warn!("MCP stdio: le binaire sort du dossier du serveur : {rel}");
+            return None;
+        }
+    }
+    Some(candidate)
+}
+
+/// Variables d'environnement transmises aux serveurs MCP (D-12). Tout le reste
+/// (clés API de Demeter, QDRANT_API_KEY, jetons…) n'est PAS hérité.
+const PASS_ENV: &[&str] = &[
+    "PATH",
+    "HOME",
+    "USERPROFILE",
+    "TEMP",
+    "TMP",
+    "TMPDIR",
+    "SYSTEMROOT",
+    "SystemRoot",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "PROGRAMDATA",
+    "PROGRAMFILES",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+];
+
+/// Une variable déclarée par un manifest est acceptée si son nom est de la forme
+/// MAJUSCULES_CHIFFRES_ET_SOULIGNÉS et n'est pas une variable sensible du système
+/// ou d'un interpréteur (injection de code par variable d'environnement).
+fn is_safe_env_key(key: &str) -> bool {
+    let well_formed = !key.is_empty()
+        && key.len() <= 64
+        && key.starts_with(|c: char| c.is_ascii_uppercase())
+        && key
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    if !well_formed {
+        return false;
+    }
+    const DENY_EXACT: &[&str] = &[
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "SYSTEMROOT",
+        "WINDIR",
+        "HOME",
+        "USERPROFILE",
+        "IFS",
+        "ENV",
+        "BASH_ENV",
+        "NODE_OPTIONS",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PERL5OPT",
+        "PERL5LIB",
+        "RUBYOPT",
+        "RUBYLIB",
+        "JAVA_TOOL_OPTIONS",
+        "_JAVA_OPTIONS",
+        "JDK_JAVA_OPTIONS",
+        "CLASSPATH",
+        "GCONV_PATH",
+        "LOCPATH",
+        "NLSPATH",
+        "SSLKEYLOGFILE",
+    ];
+    !DENY_EXACT.contains(&key) && !key.starts_with("LD_") && !key.starts_with("DYLD_")
+}
+
+/// Lit une ligne en plafonnant sa taille (D-12) : une ligne sans fin ne peut plus
+/// faire croître la mémoire sans limite.
+async fn read_line_capped<R>(
+    reader: &mut BufReader<R>,
+    max: usize,
+) -> std::io::Result<Option<String>>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    let mut buf = Vec::new();
+    let n = reader
+        .take((max + 1) as u64)
+        .read_until(b'\n', &mut buf)
+        .await?;
+    if n == 0 {
+        return Ok(None);
+    }
+    if buf.len() > max && buf.last() != Some(&b'\n') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "ligne trop longue",
+        ));
+    }
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+}
+
+/// Taille maximale d'une ligne JSON-RPC sur stdout (les images base64 sont grosses).
+const MAX_STDOUT_LINE: usize = 32 * 1024 * 1024;
+/// Taille maximale d'une ligne de stderr relayée dans les journaux.
+const MAX_STDERR_LINE: usize = 64 * 1024;
 
 // ── Process en vie ───────────────────────────────────────────────────────────
 
@@ -193,6 +326,12 @@ struct RunningProcess {
 pub struct StdioManager {
     mcp_dir: Arc<tokio::sync::RwLock<Option<PathBuf>>>,
     processes: Arc<Mutex<HashMap<String, Arc<Mutex<RunningProcess>>>>>,
+}
+
+impl Default for StdioManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StdioManager {
@@ -370,7 +509,22 @@ impl StdioManager {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        // D-12 : environnement minimal. On repart d'un environnement VIDE et on ne
+        // transmet que la liste blanche ci-dessus + les paramètres déclarés.
+        cmd.env_clear();
+        for key in PASS_ENV {
+            if let Some(v) = std::env::var_os(key) {
+                cmd.env(key, v);
+            }
+        }
         for param in &server.manifest.params {
+            if !is_safe_env_key(&param.key) {
+                warn!(
+                    "MCP stdio '{}': variable '{}' refusée (nom non autorisé)",
+                    id, param.key
+                );
+                continue;
+            }
             if let Some(val) = env_overrides.get(&param.key) {
                 if !val.trim().is_empty() {
                     cmd.env(&param.key, val);
@@ -394,9 +548,9 @@ impl StdioManager {
         let pending_reader = pending.clone();
         let server_id = id.to_string();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
+            let mut reader = BufReader::new(stdout);
             loop {
-                match lines.next_line().await {
+                match read_line_capped(&mut reader, MAX_STDOUT_LINE).await {
                     Ok(Some(line)) => {
                         let trimmed = line.trim();
                         if trimmed.is_empty() {
@@ -432,9 +586,14 @@ impl StdioManager {
         // Tâche de lecture stderr → simple relais vers les logs Demeter.
         let server_id_err = id.to_string();
         tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                info!("MCP stdio '{}' (stderr): {}", server_id_err, line);
+            let mut reader = BufReader::new(stderr);
+            while let Ok(Some(line)) = read_line_capped(&mut reader, MAX_STDERR_LINE).await {
+                // D-12/D-20 : niveau debug (stderr peut contenir des secrets)
+                tracing::debug!(
+                    "MCP stdio '{}' (stderr): {}",
+                    server_id_err,
+                    line.trim_end()
+                );
             }
         });
 
@@ -640,11 +799,53 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         let entry = entry?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
+        // D-12 : les liens symboliques ne sont jamais suivis ni copiés
+        let ftype = entry.file_type()?;
+        if ftype.is_symlink() {
+            continue;
+        }
+        if ftype.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {
             std::fs::copy(&src_path, &dst_path)?;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binaire_confine_au_dossier() {
+        let dir = std::env::temp_dir();
+        assert!(bin_within_dir(&dir, "bin/serveur").is_some());
+        assert!(bin_within_dir(&dir, "./bin/serveur").is_some());
+        assert!(bin_within_dir(&dir, "../evil").is_none());
+        assert!(bin_within_dir(&dir, "bin/../../evil").is_none());
+        #[cfg(unix)]
+        assert!(bin_within_dir(&dir, "/bin/sh").is_none());
+        #[cfg(windows)]
+        assert!(bin_within_dir(&dir, "C:\\Windows\\System32\\cmd.exe").is_none());
+    }
+
+    #[test]
+    fn variables_d_environnement_sures() {
+        assert!(is_safe_env_key("GRIST_API_KEY"));
+        assert!(is_safe_env_key("PISTE_CLIENT_ID"));
+        for bad in [
+            "PATH",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "NODE_OPTIONS",
+            "path",
+            "",
+            "A-B",
+            "1A",
+            "PYTHONPATH",
+        ] {
+            assert!(!is_safe_env_key(bad), "{bad}");
+        }
+    }
 }

@@ -1,0 +1,16 @@
+# Exceptions de `cargo audit` (constat D-23). Chaque entrée est JUSTIFIÉE ; à
+# réexaminer à chaque mise à jour de Tauri et de jsonwebtoken.
+[advisories]
+ignore = [
+  # rsa — « Marvin Attack » (attaque par canal auxiliaire sur le déchiffrement RSA).
+  # Aucun correctif publié. Dépendance transitive de jsonwebtoken (feature
+  # rust_crypto) ; Demeter n'utilise QUE HS256 (HMAC) : aucune opération RSA n'est
+  # jamais effectuée, la vulnérabilité n'est pas atteignable.
+  "RUSTSEC-2023-0071",
+  # quick-xml 0.39 — complexité quadratique et allocation non bornée sur un XML
+  # malveillant. Dépendance transitive de plist ← tauri-utils, utilisée à la
+  # COMPILATION pour lire les fichiers de configuration du projet (de confiance),
+  # jamais à l'exécution ni sur des données utilisateur.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
+]

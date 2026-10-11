@@ -20,11 +20,14 @@ mod api;
 mod config;
 mod db;
 mod extract;
+mod image_fetch;
 mod mcp;
 mod mcp_pack;
 mod mcp_stdio;
 mod models;
 mod rag;
+mod secrets;
+mod security;
 mod spaces;
 
 pub use api::{AppState, Credentials};
@@ -52,6 +55,125 @@ struct CredentialsPayload {
     /// (id du manifest) puis par clé de paramètre (ex : "GRIST_API_KEY").
     #[serde(default)]
     mcp_env: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// Serveurs MCP configurés (URL http(s) ou « stdio:<id> »). Seuls ces serveurs
+    /// sont utilisables via l'API HTTP (D-03).
+    #[serde(default)]
+    mcp_servers: Vec<String>,
+}
+
+/// Retourne le jeton secret de l'API locale (D-01). Commande IPC : le jeton
+/// n'est jamais exposé par HTTP.
+#[tauri::command]
+async fn get_api_token(
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+) -> Result<String, String> {
+    Ok(state.api_token.clone())
+}
+
+/// Retourne l'état de sécurité (chiffrement de la base, trousseau) pour que
+/// l'interface avertisse l'utilisateur en cas de mode dégradé (D-08, D-09).
+#[tauri::command]
+async fn get_security_status(
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+) -> Result<secrets::SecurityStatus, String> {
+    Ok(state.security.clone())
+}
+
+/// Lit les secrets de configuration (JSON) dans le trousseau du système (D-08).
+/// Le nom de l'entrée est FIXE : le frontend ne peut lire aucun autre secret
+/// (en particulier pas la clé de chiffrement de la base).
+#[tauri::command]
+async fn secrets_get() -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(|| secrets::get_blob(secrets::SETTINGS_BLOB))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Enregistre les secrets de configuration (objet JSON) dans le trousseau.
+#[tauri::command]
+async fn secrets_set(value: String) -> Result<(), String> {
+    if value.len() > 512 * 1024 {
+        return Err("Secrets trop volumineux".into());
+    }
+    if !serde_json::from_str::<serde_json::Value>(&value)
+        .map(|v| v.is_object())
+        .unwrap_or(false)
+    {
+        return Err("Les secrets doivent être un objet JSON".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || secrets::set_blob(secrets::SETTINGS_BLOB, &value))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Ouvre la base de conversations : chiffrée (SQLCipher) avec une clé du
+/// trousseau ; migre une ancienne base en clair ; en cas d'échec, bascule en
+/// mémoire (aucune donnée détruite) et le signale par `SecurityStatus` (D-09).
+async fn open_database(path: &std::path::Path) -> (Database, secrets::SecurityStatus) {
+    let keychain_ok = tauri::async_runtime::spawn_blocking(secrets::keychain_available)
+        .await
+        .unwrap_or(false);
+    let mut status = secrets::SecurityStatus {
+        keychain_available: keychain_ok,
+        ..Default::default()
+    };
+
+    let degraded = |mut status: secrets::SecurityStatus, msg: String| async move {
+        tracing::error!("{msg}");
+        status.warnings.push(msg);
+        let db = Database::in_memory()
+            .await
+            .expect("Failed to open in-memory database");
+        (db, status)
+    };
+
+    let path_buf = path.to_path_buf();
+    let key = match tauri::async_runtime::spawn_blocking(move || secrets::resolve_db_key(&path_buf))
+        .await
+    {
+        Ok(Ok(k)) => k,
+        Ok(Err(msg)) => return degraded(status, msg).await,
+        Err(e) => return degraded(status, e.to_string()).await,
+    };
+    let key_str = match &key {
+        secrets::DbKey::Key(k) => Some(k.clone()),
+        secrets::DbKey::Plaintext => None,
+    };
+
+    let migrated = match db::prepare_file(path, key_str.as_deref()) {
+        Ok(m) => m,
+        Err(e) => {
+            return degraded(status, format!("Migration de la base impossible : {e:#}")).await
+        }
+    };
+    match Database::new(path, key_str.as_deref()).await {
+        Ok(db) => {
+            status.db_encrypted = key_str.is_some();
+            status.db_persistent = true;
+            if key_str.is_none() {
+                status.warnings.push(
+                    "Base de conversations NON chiffrée (DEMETER_ALLOW_PLAINTEXT_DB=1).".into(),
+                );
+            }
+            // La sauvegarde en clair d'une migration précédente est supprimée dès
+            // que la base chiffrée a été ouverte avec succès lors d'un lancement ultérieur.
+            if !migrated {
+                db::purge_pre_encryption_backup(path);
+            }
+            (db, status)
+        }
+        Err(e) => degraded(status, format!("Ouverture de la base impossible : {e:#}")).await,
+    }
+}
+
+/// L'endpoint LLM doit être une URL http(s) (D-02) ; toute autre forme est refusée.
+fn validate_http_url(url: &str) -> Result<(), String> {
+    let u = url.trim().to_ascii_lowercase();
+    if u.is_empty() || u.starts_with("http://") || u.starts_with("https://") {
+        Ok(())
+    } else {
+        Err("L'endpoint doit commencer par http:// ou https://".to_string())
+    }
 }
 
 #[tauri::command]
@@ -59,6 +181,10 @@ async fn init_credentials(
     state: tauri::State<'_, std::sync::Arc<AppState>>,
     payload: CredentialsPayload,
 ) -> Result<(), String> {
+    validate_http_url(&payload.endpoint)?;
+    if let Some(u) = payload.qdrant_url.as_deref() {
+        validate_http_url(u)?;
+    }
     let mut creds = state.credentials.write().await;
     creds.endpoint = payload.endpoint;
     creds.bearer = payload.bearer;
@@ -79,23 +205,23 @@ async fn init_credentials(
         .map(std::path::PathBuf::from);
     state.mcp_stdio.set_dir(mcp_dir).await;
     *state.mcp_env.write().await = payload.mcp_env;
+    *state.mcp_allowed.write().await = payload
+        .mcp_servers
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
 
-    // ── TRACE init_credentials ───────────────────────────────────────────────
-    let creds = state.credentials.read().await;
-    let is_jwt_key = creds
-        .qdrant_api_key
-        .as_deref()
-        .map(|k| k.starts_with("eyJ"))
-        .unwrap_or(false);
-    tracing::info!(
-        "[TRACE init_credentials] user_email={:?} qdrant_key_type={} key_prefix={:?}          qdrant_url={:?} nb_collection_tokens={} collections={:?} mcp_dir={:?}",
-        creds.user_email,
-        if is_jwt_key { "JWT" } else { "raw_key_or_none" },
-        creds.qdrant_api_key.as_deref().map(|k| &k[..k.len().min(12)]),
-        creds.qdrant_url,
-        creds.qdrant_collection_tokens.len(),
-        creds.qdrant_collection_tokens.iter().map(|ct| ct.collection.clone()).collect::<Vec<_>>(),
-        state.mcp_stdio.dir().await,
+    // Aucune donnée sensible (clé, e-mail, chemins) n'est journalisée (D-20).
+    tracing::debug!(
+        "init_credentials : {} jeton(s) de collection, {} serveur(s) MCP autorisé(s)",
+        state
+            .credentials
+            .read()
+            .await
+            .qdrant_collection_tokens
+            .len(),
+        state.mcp_allowed.read().await.len(),
     );
 
     Ok(())
@@ -103,8 +229,13 @@ async fn init_credentials(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Charge le fichier .env s'il existe (silencieux si absent)
-    let _ = dotenvy::dotenv();
+    // Charge le fichier .env s'il existe — UNIQUEMENT en build de debug (D-22) : en
+    // production, un .env présent dans le dossier de lancement ne doit pas pouvoir
+    // rediriger QDRANT_URL / API_PORT ni les clés.
+    #[cfg(debug_assertions)]
+    {
+        let _ = dotenvy::dotenv();
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -301,13 +432,20 @@ pub fn run() {
             let db_path_clone = db_path.clone();
             let prompts_path_clone = prompts_path.clone();
 
-            let db = tauri::async_runtime::block_on(async {
-                Database::new(&db_path_clone)
-                    .await
-                    .expect("Failed to open database")
-            });
+            let (db, security_status) =
+                tauri::async_runtime::block_on(async { open_database(&db_path_clone).await });
 
-            let (router, app_state) = api::build_router(db, prompts_path_clone, official_mcp_dir);
+            // D-01 : jeton secret de session + port d'écoute connu du garde (Host).
+            let api_port = config::api_port();
+            let api_token = security::generate_token();
+            let (router, app_state) = api::build_router(
+                db,
+                prompts_path_clone,
+                official_mcp_dir,
+                api_token,
+                api_port,
+                security_status,
+            );
 
             // Arrêt propre des process MCP stdio quand la fenêtre se ferme.
             if let Some(window) = app.get_webview_window("main") {
@@ -325,13 +463,35 @@ pub fn run() {
             // Partager AppState avec les commandes Tauri (init_credentials...)
             handle.manage(app_state);
 
+            // D-22 : le port est réservé AVANT d'ouvrir l'interface. S'il est déjà
+            // pris, Demeter s'arrête avec un message clair : l'interface enverrait
+            // sinon son jeton d'API à n'importe quel programme qui écoute sur ce port.
+            let addr = SocketAddr::from(([127, 0, 0, 1], api_port));
+            let std_listener = match std::net::TcpListener::bind(addr) {
+                Ok(l) => l,
+                Err(e) => {
+                    let msg = format!(
+                        "Le port local {api_port} est déjà utilisé par un autre programme ({e}).\n\n\
+                         Par sécurité, Demeter ne démarre pas : cet autre programme pourrait \
+                         recevoir vos identifiants. Fermez-le, puis relancez Demeter."
+                    );
+                    tracing::error!("{msg}");
+                    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+                    app.dialog()
+                        .message(msg)
+                        .title("Demeter — port indisponible")
+                        .kind(MessageDialogKind::Error)
+                        .blocking_show();
+                    return Err(e.into());
+                }
+            };
+            std_listener.set_nonblocking(true)?;
+
             tauri::async_runtime::spawn(async move {
-                let addr = SocketAddr::from(([127, 0, 0, 1], config::api_port()));
                 info!("API server listening on http://{}", addr);
 
-                let listener = tokio::net::TcpListener::bind(addr)
-                    .await
-                    .expect("Failed to bind API port");
+                let listener = tokio::net::TcpListener::from_std(std_listener)
+                    .expect("Failed to register API listener");
 
                 axum::serve(listener, router)
                     .await
@@ -340,7 +500,13 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![init_credentials])
+        .invoke_handler(tauri::generate_handler![
+            init_credentials,
+            get_api_token,
+            get_security_status,
+            secrets_get,
+            secrets_set
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Demeter");
 }

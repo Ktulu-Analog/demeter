@@ -1,6 +1,6 @@
 [package]
 name = "demeter"
-version = "2.4.0"
+version = "2.4.5"
 description = "Demeter – Assistant RH"
 authors = ["Pierre Couget <ktulu.analog@gmail.com>"]
 edition = "2021"
@@ -35,10 +35,19 @@ reqwest = { version = "0.12", features = ["json", "stream", "multipart", "rustls
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_yaml = "0.9"
+# Remplace serde_yaml (archivé et non maintenu) : fork maintenu, API identique.
+serde_norway = "0.9"
 
 # Database
-rusqlite = { version = "0.31", features = ["bundled"] }
+# SQLCipher (chiffrement de la base au repos, D-09) avec OpenSSL compilé depuis les sources :
+# aucune dépendance système, identique sur Windows, macOS et Linux.
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
+# Trousseau du système (D-08) : Credential Manager (Windows), Keychain (macOS),
+# Secret Service (Linux). Sans fonctionnalité de plateforme, keyring bascule sur un
+# magasin factice en mémoire : les trois sont donc obligatoires.
+# Vérification des signatures minisign du pack MCP (D-13) : Rust pur, sans dépendance.
+minisign-verify = "0.2"
+keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "vendored", "crypto-rust"] }
 tokio-rusqlite = "0.5"
 
 # Logging
@@ -61,10 +70,9 @@ regex = "1"
 # JWT pour Qdrant granular access keys
 jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto"] }
 
-pdf-extract = "0.10"
+pdf-extract = "0.12"
 zip = "2"
 sha2 = "0.10"
-quick-xml = { version = "0.36", features = ["serialize"] }
 encoding_rs = "0.8"
 urlencoding = "2"
 

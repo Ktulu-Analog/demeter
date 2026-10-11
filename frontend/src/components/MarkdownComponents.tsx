@@ -34,9 +34,10 @@ class VisualErrorBoundary extends React.Component<{ label: string; children: Rea
 // (Excalidraw supprimé — remplacé par renderer SVG natif, voir SvgBlock ci-dessous)
 import type { Components } from 'react-markdown';
 import type { Element } from 'hast';
+import { mergeEChartsOption, cleanEChartsCode, parseEChartsOption } from '../utils/text';
 import { API_BASE } from '../constants';
-import { mergeEChartsOption, cleanEChartsCode } from '../utils/text';
 import { sanitizeMermaid } from '../utils/mermaid-sanitizer';
+import { sanitizeSvgMarkup } from '../utils/svg-sanitizer';
 import * as echarts from 'echarts';
 import mermaid from 'mermaid';
 
@@ -147,7 +148,7 @@ function _getMermaidThemeVars(dark: boolean) {
 mermaid.initialize({
   startOnLoad: false,
   theme: 'base',
-  securityLevel: 'loose',
+  securityLevel: 'strict',
   suppressErrorRendering: true,
   themeVariables: _getMermaidThemeVars(_darkMq.matches),
 });
@@ -157,7 +158,7 @@ _darkMq.addEventListener('change', (e) => {
   mermaid.initialize({
     startOnLoad: false,
     theme: 'base',
-    securityLevel: 'loose',
+    securityLevel: 'strict',
     suppressErrorRendering: true,
     themeVariables: _getMermaidThemeVars(e.matches),
   });
@@ -176,71 +177,83 @@ function getMermaidSandbox(): HTMLElement {
   return el;
 }
 
-// ── Image proxy wikimedia ──────────────────────────────────────────────────
-async function resolveImageUrl(rawSrc: string): Promise<string | null> {
-  if (!rawSrc) return null;
-  const wikiFileMatch = rawSrc.match(/commons\.wikimedia\.org\/wiki\/File:(.+)/i);
-  if (wikiFileMatch) {
-    const filename = decodeURIComponent(wikiFileMatch[1]);
-    try {
-      const apiUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=File:${encodeURIComponent(filename)}&prop=imageinfo&iiprop=url&format=json&origin=*`;
-      const res = await fetch(apiUrl);
-      const data = await res.json();
-      const pages: Record<string, { imageinfo?: Array<{ url: string }> }> = data?.query?.pages || {};
-      for (const page of Object.values(pages)) {
-        const url = page?.imageinfo?.[0]?.url;
-        if (url) return url;
-      }
-    } catch { /* ignore */ }
-    return rawSrc;
-  }
-  return rawSrc;
-}
-
+// ── Images Markdown ─────────────────────────────────────────────────────────
+// D-05 / D-06 : une image DISTANTE n'est jamais chargée automatiquement : son
+// URL peut transporter des données de la conversation vers un tiers (exfiltration
+// silencieuse). Elle s'affiche comme un bouton « Charger l'image » ; au clic,
+// le backend la télécharge via un endpoint durci (adresses publiques seulement,
+// types raster, 8 Mo max — voir image_fetch.rs) et le frontend l'affiche en blob:.
+// Les images data: raster (auto-contenues) s'affichent directement.
 interface MdImageProps { src?: string; alt?: string; }
 
+const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=\s]+$/i;
+
+function remoteHost(src: string): string | null {
+  try {
+    const u = new URL(src);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.host : null;
+  } catch { return null; }
+}
+
 export function MdImage({ src: rawSrc, alt }: MdImageProps) {
-  const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
-  const [errored, setErrored]         = useState(false);
-  const [loading, setLoading]         = useState(true);
+  const [state, setState] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [errMsg, setErrMsg] = useState('');
 
-  useEffect(() => {
-    if (!rawSrc) return;
-    setErrored(false);
-    setLoading(true);
+  // Libère l'URL blob au démontage / changement
+  useEffect(() => () => { if (blobUrl) URL.revokeObjectURL(blobUrl); }, [blobUrl]);
 
-    // Les data-URLs (base64 inline) sont auto-contenues — pas de proxy
-    if (rawSrc.startsWith('data:')) {
-      setResolvedSrc(rawSrc);
-      setLoading(false);
-      return;
-    }
-
-    resolveImageUrl(rawSrc).then(url => {
-      if (!url) { setResolvedSrc(null); setLoading(false); return; }
-      // Les URLs localhost (Garage, services locaux) sont accessibles directement
-      // depuis le navigateur — pas besoin de proxy.
-      const isLocal = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|[^/]*\.localhost)(:\d+)?/.test(url);
-      const resolved = isLocal
-        ? url
-        : `${API_BASE}/api-proxy/api/image-proxy?url=${encodeURIComponent(url)}`;
-      setResolvedSrc(resolved);
-      setLoading(false);
-    });
-  }, [rawSrc]);
-
-  if (loading) return <span className="md-img-wrap md-img-loading">⏳ Chargement de l'image…</span>;
-  if (errored || !resolvedSrc) {
+  if (rawSrc && SAFE_DATA_IMAGE.test(rawSrc)) {
     return (
-      <a className="md-img-fallback md-link" href={rawSrc} target="_blank" rel="noopener noreferrer">
-        🖼 {alt || rawSrc}
-      </a>
+      <span className="md-img-wrap">
+        <img className="md-img" src={rawSrc} alt={alt || ''} />
+        {alt && <span className="md-img-caption">{alt}</span>}
+      </span>
     );
   }
+
+  const host = rawSrc ? remoteHost(rawSrc) : null;
+  if (!rawSrc || !host) {
+    return <span className="md-img-fallback">🖼 {alt || 'Image non affichable'}</span>;
+  }
+
+  if (state === 'loaded' && blobUrl) {
+    return (
+      <span className="md-img-wrap">
+        <img className="md-img" src={blobUrl} alt={alt || ''} />
+        <span className="md-img-caption">{alt ? `${alt} — ` : ''}{host}</span>
+      </span>
+    );
+  }
+
+  const load = async () => {
+    setState('loading');
+    setErrMsg('');
+    try {
+      const res = await fetch(`${API_BASE}/api-proxy/api/image-fetch?url=${encodeURIComponent(rawSrc)}`);
+      if (!res.ok) throw new Error((await res.text().catch(() => '')) || `HTTP ${res.status}`);
+      const blob = await res.blob();
+      setBlobUrl(URL.createObjectURL(blob));
+      setState('loaded');
+    } catch (e) {
+      setErrMsg((e as Error).message.slice(0, 160));
+      setState('error');
+    }
+  };
+
   return (
-    <span className="md-img-wrap">
-      <img className="md-img" src={resolvedSrc} alt={alt || ''} onError={() => setErrored(true)} loading="lazy" />
-      {alt && <span className="md-img-caption">{alt}</span>}
+    <span className="md-img-fallback">
+      🖼 {alt || 'Image distante'}
+      <button
+        type="button"
+        className="md-img-load"
+        onClick={load}
+        disabled={state === 'loading'}
+        title={`Télécharger cette image depuis ${host}\n${rawSrc}`}
+      >
+        {state === 'loading' ? 'Chargement…' : `Charger depuis ${host}`}
+      </button>
+      {state === 'error' && <span className="md-img-err">Échec : {errMsg}</span>}
     </span>
   );
 }
@@ -266,8 +279,8 @@ export const EChartsBlock = memo(function EChartsBlock({ code, streaming, compac
     let cleaned = '';
     try {
       cleaned = cleanEChartsCode(code);
-      // eslint-disable-next-line no-new-func
-      option = (new Function(`return (${cleaned})`))();
+      // D-04 : analyse sans exécution (plus de new Function)
+      option = parseEChartsOption(code);
     } catch (e) {
       setError('JSON invalide : ' + (e as Error).message + '\n\n--- Source nettoyée ---\n' + cleaned);
       return;
@@ -406,7 +419,10 @@ function ScreenshotBlock({ raw }: ScreenshotBlockProps) {
     } catch { /* première ligne pas du JSON → tout est base64 */ }
   }
 
-  const src = `data:${mime};base64,${b64}`;
+  // D-06 : on n'accepte que des images raster et du base64 pur
+  const safeMime = /^image\/(?:png|jpe?g|gif|webp)$/i.test(mime) ? mime : 'image/png';
+  const safeB64  = /^[A-Za-z0-9+/=\s]*$/.test(b64) ? b64 : '';
+  const src = `data:${safeMime};base64,${safeB64}`;
   return (
     <span className="md-img-wrap">
       <img className="md-img" src={src} alt={alt} style={{ maxWidth: '100%', borderRadius: 6 }} />
@@ -422,10 +438,8 @@ interface SvgBlockProps { code: string; streaming?: boolean; }
 
 /** Sanitise le SVG et force quelques attributs de sécurité/qualité */
 function sanitizeSvg(raw: string): string {
-  let s = raw
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/\s+on\w+="[^"]*"/gi, '')
-    .replace(/\s+on\w+='[^']*'/gi, '');
+  // D-07 : assainissement par listes blanches sur le DOM (plus de regex)
+  let s = sanitizeSvgMarkup(raw);
 
   // Supprimer width/height absolus — le CSS prend le relais via width:100%/height:auto
   s = s.replace(/(<svg\b[^>]*)\s+width="[0-9.]+(?:px|pt|cm|in|em|rem)?"/i, '$1');

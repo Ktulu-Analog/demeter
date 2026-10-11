@@ -14,8 +14,13 @@
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import './fonts';
 import App from './App';
 import './index.css';
+import { installApiAuth } from './utils/api-auth';
+
+// D-01 : ajoute le jeton secret à toutes les requêtes vers l'API locale.
+installApiAuth();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('Root element not found');

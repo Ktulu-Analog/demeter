@@ -179,7 +179,7 @@ pub struct CollectionMetaUpdateRequest {
 pub struct TokenGenerateRequest {
     /// Niveau d'accès : "r" (lecture) ou "rw" (lecture-écriture)
     pub access: String,
-    /// Durée de validité en secondes (défaut : 365 jours)
+    /// Durée de validité en secondes (défaut : 90 jours, max : 1 an)
     pub ttl_seconds: Option<i64>,
 }
 

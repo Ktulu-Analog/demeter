@@ -33,5 +33,7 @@ export default defineConfig({
   build: {
     outDir: 'build',
     emptyOutDir: true,
+    // D-21 / CSP : les polices restent des fichiers (font-src 'self'), pas des data: URI.
+    assetsInlineLimit: 0,
   },
 });

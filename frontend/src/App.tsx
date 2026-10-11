@@ -20,6 +20,7 @@ import type { Conversation, Space } from './hooks/index';
 
 type LoadableConversation = { id: string; title: string; messages: ChatMessage[]; space_id?: string | null };
 import { genId } from './utils/text';
+import { hasKeychain, splitSettings, pickSecrets, readSecrets, writeSecrets, readSecurityStatus } from './utils/secureSettings';
 import { hasArtifacts, extractArtifacts } from './utils/artifacts';
 import { Message } from './components/Message';
 import type { ChatMessage, Attachment } from './components/Message';
@@ -82,6 +83,9 @@ function AppInner() {
   const { spaces, loadingSpaces, reloadSpaces } = useSpaces();
   const { conversations, saveConversation, deleteConversation } = useConversations();
 
+  // D-08 : l'état initial peut contenir d'anciens secrets laissés dans le localStorage
+  // (versions antérieures) ; ils sont migrés vers le trousseau au démarrage (voir
+  // l'effet « secretsLoaded » plus bas) puis effacés du localStorage.
   const [settings, setSettings] = useState<Settings>(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('demeter_settings') || '{}');
@@ -102,6 +106,8 @@ function AppInner() {
     // Si la clé est un JWT utilisateur (commence par "eyJ"), tenter de décoder
     // le payload base64url pour extraire les collections autorisées et les passer
     // comme qdrant_collection_tokens — sans vérifier la signature (lecture seule).
+    // ⚠ Ce décodage sert UNIQUEMENT à l'affichage : ne jamais en tirer une décision
+    // de sécurité (D-19). L'autorisation réelle est faite par Qdrant, qui vérifie la signature.
     let collectionTokens: { collection: string; token: string }[] = [];
     if (rawKey && rawKey.startsWith('eyJ')) {
       try {
@@ -133,15 +139,58 @@ function AppInner() {
         qdrant_collection_tokens: collectionTokens,
         mcp_dir:                  s.mcp_dir?.trim() || null,
         mcp_env:                  s.mcp_stdio_config || {},
+        // D-03 : liste blanche des serveurs MCP utilisables côté backend
+        mcp_servers: [
+          ...(s.mcp_servers || []).map(m => m.url),
+          ...(s.web_search_mcp ? [s.web_search_mcp] : []),
+        ],
       }
     })?.catch(console.error);
+  };
+
+  // D-08 : partie publique → localStorage ; partie secrète → trousseau du système.
+  // Hors Tauri (dev navigateur), tout reste dans le localStorage.
+  const persistSettings = (s: Settings) => {
+    if (!hasKeychain()) {
+      localStorage.setItem('demeter_settings', JSON.stringify(s));
+      return;
+    }
+    const { publicPart, secretPart } = splitSettings(s);
+    if (keychainOkRef.current) {
+      localStorage.setItem('demeter_settings', JSON.stringify(publicPart));
+    } else {
+      // Trousseau en échec : on ne réécrit PAS les secrets en clair ; les anciennes
+      // valeurs (migration non terminée) restent telles quelles dans le localStorage.
+      const prev = JSON.parse(localStorage.getItem('demeter_settings') || '{}');
+      localStorage.setItem('demeter_settings', JSON.stringify({ ...prev, ...publicPart }));
+    }
+    writeSecrets(secretPart)
+      .then(() => {
+        if (!keychainOkRef.current) {
+          keychainOkRef.current = true;
+          localStorage.setItem('demeter_settings', JSON.stringify(publicPart));
+        }
+      })
+      .catch((e) => {
+        keychainOkRef.current = false;
+        toastFn(`Trousseau du système indisponible : les secrets ne seront pas conservés après la fermeture (${e}).`, 'error');
+      });
   };
 
   const saveSettings = (s: Settings) => {
     applyFontPrefs(s.font_family, s.font_size);
     setSettings(s);
-    localStorage.setItem('demeter_settings', JSON.stringify(s));
-    return initCredentials(s);
+    persistSettings(s);
+    // D-02 : le backend utilise désormais UNIQUEMENT l'endpoint et le jeton
+    // enregistrés par IPC. Si l'un des deux change, on suspend les requêtes qui
+    // en dépendent (credentialsReady) jusqu'à la fin de l'IPC.
+    const credsChanged = s.endpoint !== settings.endpoint || s.bearer !== settings.bearer;
+    const p = initCredentials(s);
+    if (p && credsChanged) {
+      setCredentialsReady(false);
+      return p.then(() => setCredentialsReady(true));
+    }
+    return p;
   };
 
   const [showSettings,      setShowSettings]      = useState(!settings.endpoint);
@@ -150,14 +199,50 @@ function AppInner() {
   // Initialise AppState Rust dès le démarrage via IPC Tauri (pas HTTP).
   // On attend la résolution de la Promise avant d'autoriser les fetches HTTP
   // qui dépendent du bearer token (modèles, utilisateur…).
-  // En parallèle, le bearer est aussi envoyé directement via le header X-Albert-Token
-  // sur ces fetches, ce qui élimine toute dépendance au timing de l'IPC.
+  // Le backend n'utilise que l'endpoint et le jeton enregistrés par cette IPC (D-02).
   const [credentialsReady, setCredentialsReady] = useState(false);
+  const [secretsLoaded, setSecretsLoaded] = useState(!hasKeychain());
+  const keychainOkRef = useRef(true);
+
+  // D-08 : charge les secrets depuis le trousseau, avec migration depuis l'ancien
+  // localStorage. Les credentials ne sont envoyés au backend qu'ensuite.
   useEffect(() => {
+    if (!hasKeychain()) return;
+    (async () => {
+      let merged = settings;
+      try {
+        const legacy = pickSecrets(JSON.parse(localStorage.getItem('demeter_settings') || '{}'));
+        const { value } = await readSecrets();
+        const hasLegacy = Object.keys(legacy).length > 0;
+        if (value) {
+          merged = { ...settings, ...value };
+        } else if (hasLegacy) {
+          // Migration : trousseau vide, secrets présents dans l'ancien localStorage
+          await writeSecrets(legacy);
+        }
+        if (value || hasLegacy) {
+          // Les secrets sont désormais dans le trousseau : on les efface du localStorage
+          const { publicPart } = splitSettings(merged);
+          localStorage.setItem('demeter_settings', JSON.stringify(publicPart));
+        }
+      } catch (e) {
+        keychainOkRef.current = false;
+        toastFn(`Trousseau du système indisponible : les secrets déjà saisis restent dans cette session mais ne seront pas conservés (${e}).`, 'error');
+      }
+      setSettings(merged);
+      setSecretsLoaded(true);
+    })();
+    readSecurityStatus().then((st) => {
+      st?.warnings.forEach((w) => toastFn(w, 'error', 15000));
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!secretsLoaded) return;
     const p = initCredentials(settings);
     if (p) p.then(() => setCredentialsReady(true)).catch(() => setCredentialsReady(true));
     else setCredentialsReady(true);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [secretsLoaded]); // eslint-disable-line react-hooks/exhaustive-deps
   const [showMcpStatus,     setShowMcpStatus]      = useState(false);
   const [showIngestion,     setShowIngestion]      = useState(false);
   const [showAudioModal,    setShowAudioModal]      = useState(false);
@@ -277,9 +362,7 @@ function AppInner() {
 
   useEffect(() => {
     if (!credentialsReady || !settings.endpoint || !settings.bearer) return;
-    fetch(`${API_BASE}/api-proxy/api/models?endpoint=${encodeURIComponent(settings.endpoint)}`, {
-      headers: { 'X-Albert-Token': settings.bearer },
-    })
+    fetch(`${API_BASE}/api-proxy/api/models`)
       .then(async r => {
         if (r.ok) return r.json();
         // En cas d'échec (ex. 401 sur /v1/models côté Albert), fallback sur
@@ -313,9 +396,7 @@ function AppInner() {
 
   useEffect(() => {
     if (!credentialsReady || !settings.endpoint || !settings.bearer) { setCurrentUser(null); return; }
-    fetch(`${API_BASE}/api-proxy/api/users/me?endpoint=${encodeURIComponent(settings.endpoint)}`, {
-      headers: { 'X-Albert-Token': settings.bearer },
-    })
+    fetch(`${API_BASE}/api-proxy/api/users/me`)
       .then(r => r.ok ? r.json() : null)
       .then((user: CurrentUser | null) => {
         setCurrentUser(user);

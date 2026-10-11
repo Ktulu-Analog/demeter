@@ -32,7 +32,7 @@ fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
 
 use axum::{
     extract::{DefaultBodyLimit, Multipart, Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderName, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, patch, post, put},
     Json, Router,
@@ -41,12 +41,12 @@ use bytes::Bytes;
 use futures::stream::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info, warn};
 
 use crate::{
     db::Database,
-    extract::extract_text,
+    extract::extract_text_async,
     models::*,
     rag::{
         self as rag, albert_base, build_system_with_rag, chunks_to_context,
@@ -226,36 +226,22 @@ Quand un outil MCP retourne une image (screenshot, capture, etc.), l'image est D
 ──────────────────────────────────────────
 "#;
 
-const IMAGE_INSTRUCTION: &str = r#"
-
-──────────────────────────────────────────
-AFFICHAGE D'IMAGES
-Quand l'utilisateur demande une image ou quand le contexte de recherche web contient des URLs d'images :
-- OBLIGATOIRE : insere l'image directement dans ta reponse avec la syntaxe markdown : ![description courte](url)
-- INTERDIT : ne jamais te contenter de donner un lien texte ou une liste de sources sans afficher l'image
-- Si tu as plusieurs images disponibles, choisis la plus pertinente et affiche-la en premier
-- Apres l'image, tu peux ajouter la source et les metadonnees (auteur, licence) en texte
-- Pour Wikimedia Commons, utilise l'URL de la page (ex: https://commons.wikimedia.org/wiki/File:X.jpg)
-──────────────────────────────────────────
-"#;
-
 fn default_system() -> String {
     format!(
-        "Tu es Demeter, un assistant RH expert et bienveillant.\nReponds en francais, de facon claire, structuree et professionnelle.{}{}{}{}{}{}",
-        LATEX_INSTRUCTION, ECHARTS_INSTRUCTION, MERMAID_INSTRUCTION, SVG_INSTRUCTION, WORD_INSTRUCTION, IMAGE_INSTRUCTION
+        "Tu es Demeter, un assistant RH expert et bienveillant.\nReponds en francais, de facon claire, structuree et professionnelle.{}{}{}{}{}",
+        LATEX_INSTRUCTION, ECHARTS_INSTRUCTION, MERMAID_INSTRUCTION, SVG_INSTRUCTION, WORD_INSTRUCTION
     )
 }
 
 fn append_instructions(system: &str) -> String {
     format!(
-        "{}{}{}{}{}{}{}",
+        "{}{}{}{}{}{}",
         system,
         LATEX_INSTRUCTION,
         ECHARTS_INSTRUCTION,
         MERMAID_INSTRUCTION,
         SVG_INSTRUCTION,
-        WORD_INSTRUCTION,
-        IMAGE_INSTRUCTION
+        WORD_INSTRUCTION
     )
 }
 
@@ -296,6 +282,14 @@ pub struct AppState {
     /// Tauri), utilisé par le bouton "Installer les MCP officiels" du panel.
     /// `None` si l'app ne bundle aucun MCP (ex : build de dev sans resources).
     pub official_mcp_dir: Option<PathBuf>,
+    /// Jeton secret de l'API locale (D-01). Généré à chaque lancement, transmis
+    /// au frontend uniquement par la commande IPC `get_api_token`.
+    pub api_token: String,
+    /// Serveurs MCP autorisés : exactement ceux de la configuration enregistrée
+    /// par `init_credentials` (D-03). Toute autre valeur reçue en HTTP est ignorée.
+    pub mcp_allowed: Arc<RwLock<std::collections::HashSet<String>>>,
+    /// État de sécurité (base chiffrée, trousseau) exposé par `get_security_status`.
+    pub security: crate::secrets::SecurityStatus,
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -304,6 +298,9 @@ pub fn build_router(
     db: Database,
     prompts_path: PathBuf,
     official_mcp_dir: Option<PathBuf>,
+    api_token: String,
+    port: u16,
+    security: crate::secrets::SecurityStatus,
 ) -> (Router, Arc<AppState>) {
     let credentials = Arc::new(RwLock::new(Credentials::default()));
     let state = Arc::new(AppState {
@@ -313,12 +310,28 @@ pub fn build_router(
         mcp_stdio: crate::mcp_stdio::StdioManager::new(),
         mcp_env: Arc::new(RwLock::new(HashMap::new())),
         official_mcp_dir,
+        api_token: api_token.clone(),
+        mcp_allowed: Arc::new(RwLock::new(std::collections::HashSet::new())),
+        security,
     });
 
+    // D-01 : CORS restreint aux origines de l'application ; le garde (Host,
+    // Origin, jeton) est appliqué à toutes les routes, routeur imbriqué compris.
+    let guard = crate::security::ApiGuard::new(api_token, port);
     let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin(AllowOrigin::list(crate::security::allowed_origins()))
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
+        .allow_headers([
+            header::CONTENT_TYPE,
+            HeaderName::from_static(crate::security::TOKEN_HEADER),
+        ]);
 
     let router = Router::new()
         // Spaces
@@ -390,12 +403,16 @@ pub fn build_router(
         .route("/api/mcp/stdio/pack-update", get(mcp_pack_check_update))
         .route("/api/mcp/stdio/pack-update", post(mcp_pack_apply_update))
         // Health
-        .route("/api/image-proxy", get(image_proxy))
+        .route("/api/image-fetch", get(image_fetch))
         .route("/health", get(health))
         // Proxy for frontend (api-proxy prefix)
         .nest("/api-proxy", build_proxy_router(state.clone()))
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            guard,
+            crate::security::guard,
+        ))
         .layer(cors);
     (router, state)
 }
@@ -463,92 +480,157 @@ fn build_proxy_router(_state: Arc<AppState>) -> Router<Arc<AppState>> {
         )
         .route("/api/mcp/stdio/pack-update", get(mcp_pack_check_update))
         .route("/api/mcp/stdio/pack-update", post(mcp_pack_apply_update))
-        .route("/api/image-proxy", get(image_proxy))
+        .route("/api/image-fetch", get(image_fetch))
         .route("/health", get(health))
 }
 
-// ── Image proxy ───────────────────────────────────────────────────────────────
-// Fetche une image distante côté serveur pour contourner les blocages CORS/Referer.
-// Le frontend appelle /api-proxy/api/image-proxy?url=<encoded_url>
+// ── Image distante, à la demande ──────────────────────────────────────────
+// Appelée uniquement après un clic explicite de l'utilisateur (D-05/D-06) ;
+// toutes les protections SSRF sont dans `image_fetch`.
 
 #[derive(serde::Deserialize)]
-struct ImageProxyParams {
+struct ImageFetchParams {
     url: String,
 }
 
-async fn image_proxy(Query(params): Query<ImageProxyParams>) -> Response {
-    let target_url = params.url.trim().to_string();
-
-    // Sécurité minimale : n'accepter que http(s)
-    if !target_url.starts_with("http://") && !target_url.starts_with("https://") {
-        return err(StatusCode::BAD_REQUEST, "URL invalide");
-    }
-
-    let client = match Client::builder()
-        .timeout(config::timeout_image_proxy())
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
-
-    let resp = match client
-        .get(&target_url)
-        .header("Referer", "https://www.google.com/")
-        .header(
-            "Accept",
-            "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+async fn image_fetch(Query(params): Query<ImageFetchParams>) -> Response {
+    match crate::image_fetch::fetch_image(&params.url).await {
+        Ok((bytes, mime)) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "no-store"),
+                (HeaderName::from_static("x-content-type-options"), "nosniff"),
+            ],
+            bytes,
         )
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("Fetch failed: {}", e)),
-    };
-
-    if !resp.status().is_success() {
-        return err(
-            StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
-            format!("Upstream returned {}", resp.status()),
-        );
+            .into_response(),
+        Err(msg) => err(StatusCode::BAD_GATEWAY, msg),
     }
-
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("image/jpeg")
-        .to_string();
-
-    // Refuser les réponses non-image pour éviter les abus
-    if !content_type.starts_with("image/") {
-        return err(
-            StatusCode::BAD_GATEWAY,
-            format!("Upstream content-type non-image: {}", content_type),
-        );
-    }
-
-    let body_bytes = match resp.bytes().await {
-        Ok(b) => b,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("Read failed: {}", e)),
-    };
-
-    use axum::http::header;
-    axum::response::Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header("Cache-Control", "public, max-age=86400")
-        .header("Access-Control-Allow-Origin", "*")
-        .body(axum::body::Body::from(body_bytes))
-        .unwrap()
-        .into_response()
 }
 
 // ── Error helper ──────────────────────────────────────────────────────────────
 
+// ── Contrôle d'accès aux collections (D-15) ──────────────────────────────────
+//
+// IMPORTANT — ce que ce contrôle est, et n'est pas :
+//   La visibilité (privée / partagée / publique) est une table SQLite LOCALE
+//   filtrée par l'e-mail de l'utilisateur. C'est un confort d'organisation, PAS
+//   une frontière de sécurité : celle-ci est l'authentification Qdrant (clé
+//   d'administration, ou JWT scopés par collection — voir
+//   docs/SECURITE_COLLECTIONS.md). Quiconque détient la clé d'administration
+//   peut tout lire, quelles que soient les métadonnées.
+//
+// Règles (mode « fermé » pour les écritures) :
+//   - lecture : collection avec métadonnées → `is_accessible_by` ; collection
+//     SANS métadonnées (créée directement dans Qdrant, dite « externe ») →
+//     lisible, Qdrant filtrant via le JWT de l'utilisateur ;
+//   - écriture (ajout/suppression de documents, renommage, suppression,
+//     changement de visibilité) : administrateur, ou propriétaire identifié
+//     (e-mail connu) d'une collection qui a des métadonnées. Une collection
+//     externe ou « orpheline » (propriétaire vide ou « unknown ») n'est donc
+//     gérable que par un administrateur ;
+//   - toute erreur de lecture des métadonnées REFUSE l'accès (jamais d'ouverture
+//     par défaut).
+
+/// Adresse e-mail exploitable de l'utilisateur courant (jamais « unknown »).
+fn known_email(creds: &Credentials) -> Option<String> {
+    creds
+        .user_email
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty() && *e != "unknown")
+        .map(str::to_string)
+}
+
+/// Droit de lecture sur une collection.
+async fn can_read_collection(state: &AppState, user_email: &str, name: &str) -> bool {
+    match state.db.get_collection_meta(name.to_string()).await {
+        Ok(Some(m)) => m.is_accessible_by(user_email),
+        Ok(None) => true, // collection externe : Qdrant filtre via le JWT
+        Err(e) => {
+            warn!("[acl] lecture des métadonnées impossible, accès refusé : {e}");
+            false
+        }
+    }
+}
+
+/// Droit d'écriture sur une collection (voir les règles ci-dessus).
+async fn can_write_collection(state: &AppState, creds: &Credentials, name: &str) -> bool {
+    if is_admin(creds) {
+        return true;
+    }
+    let Some(email) = known_email(creds) else {
+        return false;
+    };
+    match state.db.get_collection_meta(name.to_string()).await {
+        Ok(Some(m)) => !m.owner_id.is_empty() && m.owner_id != "unknown" && m.owner_id == email,
+        Ok(None) => false, // collection externe : administrateur uniquement
+        Err(e) => {
+            warn!("[acl] lecture des métadonnées impossible, écriture refusée : {e}");
+            false
+        }
+    }
+}
+
+/// Refuse (400) un nom de collection invalide (D-16).
+fn reject_bad_collection(name: &str) -> Option<Response> {
+    if crate::rag::is_valid_collection_name(name) {
+        None
+    } else {
+        Some(err(
+            StatusCode::BAD_REQUEST,
+            "Nom de collection invalide (1 à 128 caractères, sans / \\ ? # %).",
+        ))
+    }
+}
+
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
-    (status, Json(json!({"detail": msg.into()}))).into_response()
+    let msg = msg.into();
+    // D-20 : pour une erreur serveur / amont, le détail complet reste dans les
+    // journaux ; le client reçoit un message assaini (URL masquées, tronqué).
+    let detail = if status.is_server_error() {
+        warn!("[api] {} : {}", status.as_u16(), msg);
+        public_message(&msg)
+    } else {
+        msg
+    };
+    (status, Json(json!({"detail": detail}))).into_response()
+}
+
+/// Message d'erreur présentable à l'utilisateur : première ligne, URL remplacées
+/// par « [url] » (elles peuvent contenir un hôte interne ou un jeton), 240
+/// caractères au plus.
+fn public_message(msg: &str) -> String {
+    let first = msg.lines().next().unwrap_or("").trim();
+    let cleaned: Vec<String> = first
+        .split_whitespace()
+        .map(|w| {
+            let t = w.trim_start_matches(['(', '"', '\'', '<', '[']);
+            if t.starts_with("http://") || t.starts_with("https://") {
+                "[url]".to_string()
+            } else {
+                w.to_string()
+            }
+        })
+        .collect();
+    let joined = cleaned.join(" ");
+    let mut out: String = joined.chars().take(240).collect();
+    if joined.chars().count() > 240 {
+        out.push('…');
+    }
+    if out.is_empty() {
+        "Erreur du service distant (voir les journaux).".to_string()
+    } else {
+        out
+    }
+}
+
+/// Une clé d'administration utilisable pour SIGNER des jetons partagés (D-19) :
+/// le jeton HS256 donne à son détenteur de quoi tenter hors ligne une attaque
+/// par dictionnaire sur la clé ; elle doit donc être longue et aléatoire.
+fn admin_key_is_strong(key: &str) -> bool {
+    let distinct: std::collections::HashSet<char> = key.chars().collect();
+    key.chars().count() >= 32 && distinct.len() >= 10
 }
 
 // ── Helpers JWT Qdrant ────────────────────────────────────────────────────────
@@ -572,7 +654,13 @@ async fn build_accessible_collections(
             return None; // JWT global ou pas de token → laisser Qdrant filtrer
         }
         // Filtrer par les méta locales pour n'exposer que les collections accessibles
-        let all_meta = state.db.list_collection_meta().await.unwrap_or_default();
+        let all_meta = match state.db.list_collection_meta().await {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("[acl] métadonnées illisibles, aucune collection exposée : {e}");
+                return Some(Vec::new());
+            }
+        };
         let cols: Vec<QdrantCollectionAccess> = jwt_map
             .into_iter()
             .filter(|(col_name, _)| {
@@ -836,7 +924,9 @@ async fn rag_status(State(state): State<Arc<AppState>>) -> Json<Value> {
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
-async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) -> Response {
+async fn chat(State(state): State<Arc<AppState>>, Json(mut req): Json<ChatRequest>) -> Response {
+    // D-03 : seuls les serveurs MCP de la configuration enregistrée sont utilisables.
+    req.mcp_servers = filter_allowed_mcp(&state, std::mem::take(&mut req.mcp_servers)).await;
     let creds = state.credentials.read().await.clone();
     // Resolve system prompt
     let mut system_prompt = default_system();
@@ -899,14 +989,7 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
             let has_jwt_access = jwt_key_for_col.is_some();
 
             let accessible = has_jwt_access || {
-                state
-                    .db
-                    .get_collection_meta(col_name.clone())
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|m| m.is_accessible_by(&user_email_for_rag))
-                    .unwrap_or(true) // pas de méta → accessible
+                can_read_collection(&state, &user_email_for_rag, col_name).await
             };
 
             if !accessible {
@@ -965,16 +1048,8 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
             };
             let has_jwt_access = jwt_key_for_col.is_some();
 
-            let accessible = has_jwt_access || {
-                state
-                    .db
-                    .get_collection_meta(sid.clone())
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|m| m.is_accessible_by(&user_email_for_rag))
-                    .unwrap_or(true)
-            };
+            let accessible =
+                has_jwt_access || { can_read_collection(&state, &user_email_for_rag, sid).await };
 
             if !accessible {
                 warn!(
@@ -1042,6 +1117,7 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
 
     let client = match Client::builder()
         .timeout(config::timeout_llm_stream())
+        .redirect(crate::mcp::redirect_policy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
@@ -1214,14 +1290,25 @@ async fn chat(State(state): State<Arc<AppState>>, Json(req): Json<ChatRequest>) 
                     // Format : mcp__{slug}__{tool_name}
                     let parts: Vec<&str> = fn_name.splitn(3, "__").collect();
                     let real_tool_name = if parts.len() == 3 { parts[2] } else { &fn_name };
-                    let server = req
-                        .mcp_servers
-                        .iter()
-                        .find(|s| {
-                            fn_name.starts_with(&format!("mcp__{}", crate::mcp::server_slug(s)))
-                        })
-                        .cloned()
-                        .unwrap_or_else(|| req.mcp_servers[0].clone());
+                    // D-14 : routage EXACT (préfixe « mcp__{slug}__ »). Un nom d'outil qui
+                    // ne correspond à aucun serveur n'est plus envoyé au premier serveur.
+                    let server = match req.mcp_servers.iter().find(|s| {
+                        fn_name.starts_with(&format!("mcp__{}__", crate::mcp::server_slug(s)))
+                    }) {
+                        Some(s) => s.clone(),
+                        None => {
+                            warn!(
+                                "MCP: outil '{}' sans serveur correspondant, appel refusé",
+                                fn_name
+                            );
+                            loop_messages.push(json!({
+                                "role": "tool",
+                                "tool_call_id": tc_id,
+                                "content": "Erreur : outil inconnu, aucun serveur MCP correspondant.",
+                            }));
+                            continue;
+                        }
+                    };
 
                     info!("MCP: appel tool {} sur {}", real_tool_name, server);
                     let mcp_result = if let Some(id) = stdio_id(&server) {
@@ -1445,16 +1532,17 @@ async fn mcp_list_tools(
     State(state): State<Arc<AppState>>,
     Json(req): Json<McpListRequest>,
 ) -> Response {
+    let servers = filter_allowed_mcp(&state, req.servers).await;
     let client = Client::builder()
         .timeout(config::timeout_models())
+        .redirect(crate::mcp::redirect_policy())
         .use_rustls_tls()
         .user_agent("Mozilla/5.0 (compatible; Demeter/1.0)")
         .build()
         .unwrap_or_default();
 
     // Appels parallèles — plus d'attente séquentielle
-    let futures: Vec<_> = req
-        .servers
+    let futures: Vec<_> = servers
         .iter()
         .map(|server| {
             let client = client.clone();
@@ -1672,29 +1760,43 @@ struct EndpointParams {
     pub endpoint: String,
 }
 
-/// Extrait le bearer token depuis les headers de la requête entrante.
-/// Le frontend envoie `X-Albert-Token: <bearer>` pour éviter la race condition
-/// entre l'IPC Tauri (init_credentials) et les requêtes HTTP de démarrage.
-/// Si le header est absent ou vide, on retombe sur le token stocké dans AppState.
-fn bearer_from_header_or_state(headers: &axum::http::HeaderMap, state_bearer: &str) -> String {
-    headers
-        .get("x-albert-token")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| state_bearer.to_string())
+/// Retourne (base Albert, bearer) à partir des credentials ENREGISTRÉS par la
+/// commande IPC `init_credentials` (D-02). Le paramètre `endpoint` de la
+/// requête HTTP n'est volontairement plus utilisé pour choisir la destination :
+/// il permettait d'envoyer le jeton Albert à une URL arbitraire.
+fn albert_target(creds: &Credentials) -> Result<(String, String), &'static str> {
+    if creds.endpoint.trim().is_empty() || creds.bearer.trim().is_empty() {
+        return Err("Endpoint ou jeton Albert non configuré.");
+    }
+    Ok((albert_base(&creds.endpoint), creds.bearer.clone()))
+}
+
+/// Ne conserve que les serveurs MCP présents dans la configuration enregistrée
+/// (D-03). Les serveurs inconnus reçus en HTTP sont ignorés.
+async fn filter_allowed_mcp(state: &AppState, requested: Vec<String>) -> Vec<String> {
+    let allowed = state.mcp_allowed.read().await;
+    let total = requested.len();
+    let kept: Vec<String> = requested
+        .into_iter()
+        .filter(|s| allowed.contains(s.trim()))
+        .collect();
+    if kept.len() != total {
+        warn!(
+            "[mcp] {} serveur(s) refusé(s) : absents de la configuration enregistrée",
+            total - kept.len()
+        );
+    }
+    kept
 }
 
 // ── User info ─────────────────────────────────────────────────────────────────
 
-async fn get_user_me(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Query(params): Query<EndpointParams>,
-) -> Response {
+async fn get_user_me(State(state): State<Arc<AppState>>) -> Response {
     let creds = state.credentials.read().await.clone();
-    let bearer = bearer_from_header_or_state(&headers, &creds.bearer);
-    let base = albert_base(&params.endpoint);
+    let (base, bearer) = match albert_target(&creds) {
+        Ok(t) => t,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
+    };
     let client = Client::builder()
         .timeout(config::timeout_doc_resolve())
         .use_rustls_tls()
@@ -1723,14 +1825,12 @@ async fn get_user_me(
 
 // ── Models ────────────────────────────────────────────────────────────────────
 
-async fn list_models(
-    State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Query(params): Query<EndpointParams>,
-) -> Response {
+async fn list_models(State(state): State<Arc<AppState>>) -> Response {
     let creds = state.credentials.read().await.clone();
-    let bearer = bearer_from_header_or_state(&headers, &creds.bearer);
-    let base = albert_base(&params.endpoint);
+    let (base, bearer) = match albert_target(&creds) {
+        Ok(t) => t,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
+    };
     let client = Client::builder()
         .timeout(config::timeout_doc_resolve())
         .use_rustls_tls()
@@ -1768,7 +1868,7 @@ async fn extract_file(mut multipart: Multipart) -> Response {
             Err(e) => return err(StatusCode::BAD_REQUEST, e.to_string()),
         };
 
-        return match extract_text(&bytes, &ext) {
+        return match extract_text_async(bytes.to_vec(), ext.clone()).await {
             Ok(text) => {
                 let chars = text.chars().count();
                 Json(json!({"filename": filename, "text": text, "chars": chars})).into_response()
@@ -1800,7 +1900,7 @@ async fn extract_multiple_files(mut multipart: Multipart) -> Response {
             }
         };
 
-        match extract_text(&bytes, &ext) {
+        match extract_text_async(bytes.to_vec(), ext.clone()).await {
             Ok(text) => {
                 let chars = text.chars().count();
                 results
@@ -1842,7 +1942,16 @@ async fn list_collections(
     //   On reconstruit la liste uniquement depuis les méta SQLite pour les collections
     //   auxquelles cet utilisateur a accès, sans aucun appel réseau Qdrant.
 
-    let all_meta = state.db.list_collection_meta().await.unwrap_or_default();
+    let all_meta = match state.db.list_collection_meta().await {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("[acl] métadonnées illisibles : {e}");
+            return err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Métadonnées de collection indisponibles.",
+            );
+        }
+    };
 
     if is_admin(&creds_snap) {
         // ── Mode admin : on interroge Qdrant ────────────────────────────────
@@ -1928,13 +2037,24 @@ async fn create_collection(
     State(state): State<Arc<AppState>>,
     Json(req): Json<CollectionCreateRequest>,
 ) -> Response {
+    if let Some(r) = reject_bad_collection(&req.name) {
+        return r;
+    }
     let creds_snap = state.credentials.read().await.clone();
     let admin_key = resolve_admin_key(&creds_snap);
     let url = creds_snap.qdrant_url.clone();
-    let owner = creds_snap
-        .user_email
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
+    // D-15 : plus de propriétaire « unknown ». Sans e-mail connu, seul un
+    // administrateur peut créer une collection (propriétaire « admin »).
+    let owner = match known_email(&creds_snap) {
+        Some(e) => e,
+        None if is_admin(&creds_snap) => "admin".to_string(),
+        None => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "Identité utilisateur inconnue : impossible de créer une collection.",
+            )
+        }
+    };
     info!(
         "[create_collection] Création Qdrant collection '{}'",
         req.name
@@ -1977,20 +2097,18 @@ async fn rename_collection(
     Path(collection_name): Path<String>,
     Json(req): Json<CollectionRenameRequest>,
 ) -> Response {
+    if let Some(r) = reject_bad_collection(&collection_name) {
+        return r;
+    }
+    if let Some(r) = reject_bad_collection(&req.name) {
+        return r;
+    }
     let creds_snap = state.credentials.read().await.clone();
     let admin_key = resolve_admin_key(&creds_snap);
     let url = creds_snap.qdrant_url.clone();
-    let user_email = creds_snap.user_email.clone().unwrap_or_default();
 
     // Vérifier que l'utilisateur est propriétaire de la collection
-    let is_owner = state
-        .db
-        .get_collection_meta(collection_name.clone())
-        .await
-        .ok()
-        .flatten()
-        .map(|m| m.owner_id == user_email || m.owner_id.is_empty() || m.owner_id == "unknown")
-        .unwrap_or(true); // pas de méta → collection externe, autoriser si admin
+    let is_owner = can_write_collection(&state, &creds_snap, &collection_name).await;
     if !is_owner {
         return err(
             StatusCode::FORBIDDEN,
@@ -2025,20 +2143,15 @@ async fn delete_collection_handler(
     Path(collection_name): Path<String>,
     Query(_params): Query<EndpointParams>,
 ) -> Response {
+    if let Some(r) = reject_bad_collection(&collection_name) {
+        return r;
+    }
     let creds_snap = state.credentials.read().await.clone();
     let admin_key = resolve_admin_key(&creds_snap);
     let url = creds_snap.qdrant_url.clone();
-    let user_email = creds_snap.user_email.clone().unwrap_or_default();
 
     // Vérifier que l'utilisateur est propriétaire de la collection
-    let is_owner = state
-        .db
-        .get_collection_meta(collection_name.clone())
-        .await
-        .ok()
-        .flatten()
-        .map(|m| m.owner_id == user_email || m.owner_id.is_empty() || m.owner_id == "unknown")
-        .unwrap_or(true); // pas de méta → collection externe, autoriser si admin
+    let is_owner = can_write_collection(&state, &creds_snap, &collection_name).await;
     if !is_owner {
         return err(
             StatusCode::FORBIDDEN,
@@ -2067,7 +2180,7 @@ async fn get_collection_meta_handler(
         .await
         .user_email
         .clone()
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_default();
     match state.db.get_collection_meta(collection_name.clone()).await {
         Ok(Some(meta)) => Json(json!({
             "collection_name": meta.collection_name,
@@ -2097,41 +2210,69 @@ async fn put_collection_meta_handler(
     Path(collection_name): Path<String>,
     Json(req): Json<CollectionMetaUpdateRequest>,
 ) -> Response {
-    let user_email = state
-        .credentials
-        .read()
-        .await
-        .user_email
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
+    if let Some(r) = reject_bad_collection(&collection_name) {
+        return r;
+    }
+    let creds_snap = state.credentials.read().await.clone();
+    let admin = is_admin(&creds_snap);
+    let user_email = match known_email(&creds_snap) {
+        Some(e) => e,
+        None if admin => "admin".to_string(),
+        None => {
+            return err(
+                StatusCode::FORBIDDEN,
+                "Identité utilisateur inconnue : modification refusée.",
+            )
+        }
+    };
 
-    // Récupérer ou créer les méta existantes
-    let existing = state
-        .db
-        .get_collection_meta(collection_name.clone())
-        .await
-        .unwrap_or(None);
+    // Récupérer les méta existantes (une erreur de lecture refuse la modification)
+    let existing = match state.db.get_collection_meta(collection_name.clone()).await {
+        Ok(m) => m,
+        Err(e) => {
+            warn!("[acl] lecture des métadonnées impossible : {e}");
+            return err(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Métadonnées de collection indisponibles.",
+            );
+        }
+    };
 
     let meta = match existing {
         Some(mut m) => {
-            // Seul le propriétaire peut modifier
-            if m.owner_id != user_email && m.owner_id != "unknown" {
+            // Propriétaire identifié, ou administrateur (qui « adopte » alors une
+            // collection orpheline : propriétaire vide ou « unknown »).
+            let orphan = m.owner_id.is_empty() || m.owner_id == "unknown";
+            if m.owner_id != user_email && !admin {
                 return err(
                     StatusCode::FORBIDDEN,
                     "Seul le propriétaire peut modifier la visibilité.",
                 );
             }
+            if admin && orphan {
+                m.owner_id = user_email;
+            }
             m.visibility = req.visibility;
             m.shared_with = req.shared_with;
             m
         }
-        None => crate::models::CollectionMeta {
-            collection_name: collection_name.clone(),
-            owner_id: user_email,
-            visibility: req.visibility,
-            shared_with: req.shared_with,
-            created_at: chrono::Utc::now().to_rfc3339(),
-        },
+        None => {
+            // Collection externe (sans métadonnées) : l'administrateur seul peut
+            // l'« adopter » en lui attribuant un propriétaire et une visibilité.
+            if !admin {
+                return err(
+                    StatusCode::FORBIDDEN,
+                    "Collection externe : seul un administrateur peut en définir la visibilité.",
+                );
+            }
+            crate::models::CollectionMeta {
+                collection_name: collection_name.clone(),
+                owner_id: user_email,
+                visibility: req.visibility,
+                shared_with: req.shared_with,
+                created_at: chrono::Utc::now().to_rfc3339(),
+            }
+        }
     };
 
     match state.db.upsert_collection_meta(meta.clone()).await {
@@ -2152,6 +2293,9 @@ async fn generate_collection_token(
     Path(collection_name): Path<String>,
     Json(req): Json<TokenGenerateRequest>,
 ) -> Response {
+    if let Some(r) = reject_bad_collection(&collection_name) {
+        return r;
+    }
     let creds = state.credentials.read().await.clone();
 
     // Seul un admin (clé brute) peut générer des tokens
@@ -2164,17 +2308,26 @@ async fn generate_collection_token(
             )
         }
     };
+    // D-19 : refuser de signer des jetons partageables avec une clé faible.
+    if !admin_key_is_strong(&admin_key) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "La clé d'administration Qdrant est trop faible pour signer des jetons partageables \
+             (32 caractères aléatoires au moins). Générez-en une nouvelle (ex. `openssl rand -hex 32`), \
+             configurez-la dans Qdrant, puis réessayez. Voir docs/SECURITE_QDRANT_JWT.md.",
+        );
+    }
 
     // Vérifier que la collection existe et que l'utilisateur en est propriétaire
     let user_email = creds.user_email.clone().unwrap_or_default();
-    let is_owner = state
-        .db
-        .get_collection_meta(collection_name.clone())
-        .await
-        .ok()
-        .flatten()
-        .map(|m| m.owner_id == user_email || m.owner_id.is_empty())
-        .unwrap_or(true); // pas de méta → traité comme admin
+    // Administrateur déjà exigé ci-dessus : il peut partir d'une collection externe
+    // (sans métadonnées) ; si des métadonnées existent, seul le propriétaire (ou une
+    // collection orpheline) peut en émettre. Une erreur de lecture refuse.
+    let is_owner = match state.db.get_collection_meta(collection_name.clone()).await {
+        Ok(Some(m)) => m.owner_id == user_email || m.owner_id.is_empty() || m.owner_id == "unknown",
+        Ok(None) => true,
+        Err(_) => false,
+    };
 
     if !is_owner {
         return err(
@@ -2184,7 +2337,14 @@ async fn generate_collection_token(
     }
 
     let access_level = if req.access == "rw" { "rw" } else { "r" };
-    let ttl = req.ttl_seconds.unwrap_or(365 * 24 * 3600); // 1 an par défaut
+    // D-19 : durée par défaut 90 jours, bornée entre 1 minute et 1 an
+    let ttl = req.ttl_seconds.unwrap_or(90 * 24 * 3600);
+    if !(60..=365 * 24 * 3600).contains(&ttl) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "ttl_seconds doit être compris entre 60 secondes et 1 an.",
+        );
+    }
 
     let col = QdrantCollectionAccess {
         collection: collection_name.clone(),
@@ -2224,14 +2384,7 @@ async fn list_documents(
     let user_email = creds_snap.user_email.clone().unwrap_or_default();
 
     // Vérifier que l'utilisateur a accès en lecture à cette collection
-    let accessible = state
-        .db
-        .get_collection_meta(collection_name.clone())
-        .await
-        .ok()
-        .flatten()
-        .map(|m| m.is_accessible_by(&user_email))
-        .unwrap_or(true); // pas de méta → collection externe, accessible
+    let accessible = can_read_collection(&state, &user_email, &collection_name).await;
     if !accessible {
         return err(StatusCode::FORBIDDEN, "Accès refusé à cette collection.");
     }
@@ -2250,19 +2403,14 @@ async fn delete_document(
     let creds_snap = state.credentials.read().await.clone();
     let admin_key = resolve_admin_key(&creds_snap);
     let url = creds_snap.qdrant_url.clone();
-    let user_email = creds_snap.user_email.clone().unwrap_or_default();
     // Le collection_name est passé dans le query param `endpoint` (réutilisé comme collection)
     let col = params.endpoint.clone();
+    if let Some(r) = reject_bad_collection(&col) {
+        return r;
+    }
 
-    // Vérifier que l'utilisateur a un accès en écriture (propriétaire uniquement)
-    let can_write = state
-        .db
-        .get_collection_meta(col.clone())
-        .await
-        .ok()
-        .flatten()
-        .map(|m| m.owner_id == user_email || m.owner_id.is_empty() || m.owner_id == "unknown")
-        .unwrap_or(true); // pas de méta → collection externe, autoriser si admin
+    // Écriture : administrateur ou propriétaire identifié (D-15)
+    let can_write = can_write_collection(&state, &creds_snap, &col).await;
     if !can_write {
         return err(
             StatusCode::FORBIDDEN,
@@ -2295,7 +2443,7 @@ async fn upload_document(State(state): State<Arc<AppState>>, mut multipart: Mult
                 file_name = field.file_name().unwrap_or("file").to_string();
                 match field.bytes().await {
                     Ok(b) => {
-                        info!("[upload] fichier '{}' ({} octets)", file_name, b.len());
+                        tracing::debug!("[upload] fichier '{}' ({} octets)", file_name, b.len());
                         file_bytes = Some(b);
                     }
                     Err(e) => {
@@ -2331,6 +2479,12 @@ async fn upload_document(State(state): State<Arc<AppState>>, mut multipart: Mult
         }
     }
 
+    // D-17 : bornes de découpage (évite boucle infinie / chunks absurdes)
+    let chunk_size = chunk_size.clamp(128, 8192);
+    let chunk_overlap = chunk_overlap.min(chunk_size / 2);
+    if let Some(r) = reject_bad_collection(&collection_name) {
+        return r;
+    }
     if collection_name.is_empty() {
         return err(StatusCode::BAD_REQUEST, "collection_id manquant");
     }
@@ -2340,15 +2494,7 @@ async fn upload_document(State(state): State<Arc<AppState>>, mut multipart: Mult
     };
 
     // Vérifier que l'utilisateur a un accès en écriture sur la collection
-    let user_email = creds.user_email.clone().unwrap_or_default();
-    let can_write = state
-        .db
-        .get_collection_meta(collection_name.clone())
-        .await
-        .ok()
-        .flatten()
-        .map(|m| m.owner_id == user_email || m.owner_id.is_empty() || m.owner_id == "unknown")
-        .unwrap_or(true); // pas de méta → nouvelle collection ou externe, autoriser
+    let can_write = can_write_collection(&state, &creds, &collection_name).await;
     if !can_write {
         return err(
             StatusCode::FORBIDDEN,
@@ -2406,13 +2552,13 @@ async fn upload_document(State(state): State<Arc<AppState>>, mut multipart: Mult
 
 async fn transcribe_audio(
     State(state): State<Arc<AppState>>,
-    headers: axum::http::HeaderMap,
-    Query(params): Query<EndpointParams>,
     mut multipart: Multipart,
 ) -> Response {
     let creds = state.credentials.read().await.clone();
-    let bearer = bearer_from_header_or_state(&headers, &creds.bearer);
-    let base = albert_base(&params.endpoint);
+    let (base, bearer) = match albert_target(&creds) {
+        Ok(t) => t,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
+    };
 
     info!("[audio] ── Nouvelle requête de transcription ──");
 
@@ -2431,7 +2577,7 @@ async fn transcribe_audio(
                 file_name = field.file_name().unwrap_or("audio").to_string();
                 match field.bytes().await {
                     Ok(b) => {
-                        info!("[audio] fichier '{}' ({} octets)", file_name, b.len());
+                        tracing::debug!("[audio] fichier '{}' ({} octets)", file_name, b.len());
                         file_bytes = Some(b);
                     }
                     Err(e) => {
@@ -2588,5 +2734,169 @@ async fn transcribe_audio(
             error!("[audio] ✗ erreur réseau : {}", e);
             err(StatusCode::BAD_GATEWAY, e.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod acl_tests {
+    use super::*;
+    use crate::models::{CollectionMeta, CollectionVisibility};
+
+    async fn state_with(email: Option<&str>, admin_key: Option<&str>) -> Arc<AppState> {
+        // Une clé d'administration définie dans l'environnement fausserait le test.
+        std::env::remove_var("QDRANT_API_KEY");
+        let db = Database::in_memory().await.unwrap();
+        let (_router, st) = build_router(
+            db,
+            PathBuf::from("prompts.yml"),
+            None,
+            "jeton-de-test".into(),
+            45678,
+            Default::default(),
+        );
+        {
+            let mut c = st.credentials.write().await;
+            c.user_email = email.map(str::to_string);
+            c.qdrant_api_key = admin_key.map(str::to_string);
+        }
+        st
+    }
+
+    async fn add_meta(
+        st: &AppState,
+        name: &str,
+        owner: &str,
+        vis: CollectionVisibility,
+        shared: &[&str],
+    ) {
+        st.db
+            .upsert_collection_meta(CollectionMeta {
+                collection_name: name.into(),
+                owner_id: owner.into(),
+                visibility: vis,
+                shared_with: shared.iter().map(|s| s.to_string()).collect(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            })
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn proprietaire_ecrit_les_autres_non() {
+        let st = state_with(Some("alice@x.fr"), None).await;
+        add_meta(&st, "rh", "alice@x.fr", CollectionVisibility::Private, &[]).await;
+        add_meta(&st, "compta", "bob@x.fr", CollectionVisibility::Public, &[]).await;
+        let creds = st.credentials.read().await.clone();
+        assert!(can_write_collection(&st, &creds, "rh").await);
+        assert!(
+            !can_write_collection(&st, &creds, "compta").await,
+            "publique ≠ modifiable"
+        );
+        // lecture : la publique est lisible, la privée d'autrui non
+        assert!(can_read_collection(&st, "alice@x.fr", "compta").await);
+        add_meta(
+            &st,
+            "secret",
+            "bob@x.fr",
+            CollectionVisibility::Private,
+            &[],
+        )
+        .await;
+        assert!(!can_read_collection(&st, "alice@x.fr", "secret").await);
+        add_meta(
+            &st,
+            "partage",
+            "bob@x.fr",
+            CollectionVisibility::Shared,
+            &["alice@x.fr"],
+        )
+        .await;
+        assert!(can_read_collection(&st, "alice@x.fr", "partage").await);
+        assert!(!can_write_collection(&st, &creds, "partage").await);
+    }
+
+    #[tokio::test]
+    async fn collection_externe_lisible_mais_ecriture_reservee_a_l_admin() {
+        let user = state_with(Some("alice@x.fr"), None).await;
+        let creds = user.credentials.read().await.clone();
+        assert!(can_read_collection(&user, "alice@x.fr", "externe").await);
+        assert!(!can_write_collection(&user, &creds, "externe").await);
+
+        let admin = state_with(Some("admin@x.fr"), Some("cle-admin-brute-123")).await;
+        let creds = admin.credentials.read().await.clone();
+        assert!(can_write_collection(&admin, &creds, "externe").await);
+    }
+
+    #[tokio::test]
+    async fn proprietaire_orphelin_ou_unknown_n_ouvre_plus_rien() {
+        let st = state_with(Some("alice@x.fr"), None).await;
+        add_meta(
+            &st,
+            "ancienne",
+            "unknown",
+            CollectionVisibility::Private,
+            &[],
+        )
+        .await;
+        add_meta(&st, "vide", "", CollectionVisibility::Private, &[]).await;
+        let creds = st.credentials.read().await.clone();
+        assert!(!can_write_collection(&st, &creds, "ancienne").await);
+        assert!(!can_write_collection(&st, &creds, "vide").await);
+    }
+
+    #[tokio::test]
+    async fn sans_email_connu_aucune_ecriture() {
+        let st = state_with(None, None).await;
+        add_meta(&st, "rh", "unknown", CollectionVisibility::Public, &[]).await;
+        let creds = st.credentials.read().await.clone();
+        assert!(!can_write_collection(&st, &creds, "rh").await);
+        let st2 = state_with(Some("unknown"), None).await;
+        let creds2 = st2.credentials.read().await.clone();
+        assert!(known_email(&creds2).is_none());
+        assert!(!can_write_collection(&st2, &creds2, "rh").await);
+    }
+
+    #[tokio::test]
+    async fn un_jwt_n_est_pas_un_administrateur() {
+        let st = state_with(
+            Some("alice@x.fr"),
+            Some("eyJhbGciOiJIUzI1NiJ9.eyJhIjoiciJ9.sig"),
+        )
+        .await;
+        let creds = st.credentials.read().await.clone();
+        assert!(!is_admin(&creds));
+        assert!(!can_write_collection(&st, &creds, "externe").await);
+    }
+}
+
+#[cfg(test)]
+mod hygiene_tests {
+    use super::*;
+
+    #[test]
+    fn messages_publics_masquent_les_urls_et_tronquent() {
+        let m = public_message("error sending request for url (http://10.0.0.5:6333/collections/x?api-key=SECRET): connection refused");
+        assert!(!m.contains("10.0.0.5") && !m.contains("SECRET"), "{m}");
+        assert!(m.contains("[url]"));
+        let long = public_message(&"a".repeat(1000));
+        assert!(long.chars().count() <= 241);
+        assert_eq!(
+            public_message("première\nseconde ligne secrète"),
+            "première"
+        );
+        assert!(!public_message("").is_empty());
+    }
+
+    #[test]
+    fn cle_admin_forte_ou_faible() {
+        assert!(admin_key_is_strong(
+            "0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!admin_key_is_strong("secret"));
+        assert!(
+            !admin_key_is_strong(&"a".repeat(40)),
+            "pas assez de variété"
+        );
+        assert!(!admin_key_is_strong("0123456789abcdef0123456789abcde")); // 31 caractères
     }
 }

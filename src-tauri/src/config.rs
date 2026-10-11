@@ -171,11 +171,6 @@ pub fn timeout_doc_resolve() -> Duration {
     Duration::from_secs(env_u64("TIMEOUT_DOC_RESOLVE_SECS", 10))
 }
 
-/// Timeout pour le proxy image (défaut : 15s).
-pub fn timeout_image_proxy() -> Duration {
-    Duration::from_secs(env_u64("TIMEOUT_IMAGE_PROXY_SECS", 15))
-}
-
 /// Timeout pour les appels de liste de modèles et autres appels courts (défaut : 8s).
 pub fn timeout_models() -> Duration {
     Duration::from_secs(env_u64("TIMEOUT_MODELS_SECS", 8))

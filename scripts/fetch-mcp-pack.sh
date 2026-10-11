@@ -44,6 +44,33 @@ echo "📦 Récupération de $PACK_REPO @ $VERSION"
 curl -fsSL "${BASE_URL}/${ARCHIVE}"        -o "$TMP_DIR/${ARCHIVE}"
 curl -fsSL "${BASE_URL}/checksums.txt"     -o "$TMP_DIR/checksums.txt"
 
+# ── Authenticité (D-13) ──────────────────────────────────────────────────────
+# Si une clé publique minisign est configurée dans src-tauri/mcp-pack.pub,
+# checksums.txt DOIT être signé (checksums.txt.minisig). Sans clé configurée,
+# seul le SHA-256 de la même release est vérifié (intégrité, pas authenticité).
+PUBFILE="$ROOT/src-tauri/mcp-pack.pub"
+PUBKEY="$(grep -v -e '^[[:space:]]*#' -e '^untrusted comment:' -e '^[[:space:]]*$' "$PUBFILE" 2>/dev/null | head -n1 || true)"
+if [[ -n "$PUBKEY" ]]; then
+  if [[ "${MCP_PACK_ALLOW_UNSIGNED:-}" == "1" ]]; then
+    echo "⚠️  MCP_PACK_ALLOW_UNSIGNED=1 : signature NON vérifiée." >&2
+  else
+    command -v minisign >/dev/null || { echo "❌ minisign requis (clé publique configurée) : https://jedisct1.github.io/minisign/" >&2; exit 1; }
+    curl -fsSL "${BASE_URL}/checksums.txt.minisig" -o "$TMP_DIR/checksums.txt.minisig" \
+      || { echo "❌ Release non signée : checksums.txt.minisig introuvable" >&2; exit 1; }
+    echo "🔏 Vérification de la signature minisign…"
+    TRUSTED="$(minisign -V -P "$PUBKEY" -m "$TMP_DIR/checksums.txt" -x "$TMP_DIR/checksums.txt.minisig" 2>&1)" \
+      || { echo "❌ Signature invalide : $TRUSTED" >&2; exit 1; }
+    if ! grep -q "version:${VERSION#v}\([[:space:]]\|\$\)" <<<"$TRUSTED"; then
+      echo "❌ La signature ne porte pas version:${VERSION#v} (rétrogradation ?)" >&2
+      echo "$TRUSTED" >&2
+      exit 1
+    fi
+    echo "  ✅ Signature OK"
+  fi
+else
+  echo "ℹ️  Aucune clé publique configurée (src-tauri/mcp-pack.pub) : authenticité non vérifiée." >&2
+fi
+
 echo "🔒 Vérification du checksum SHA-256…"
 EXPECTED="$(grep " ${ARCHIVE}\$" "$TMP_DIR/checksums.txt" | awk '{print $1}')"
 if [[ -z "$EXPECTED" ]]; then
