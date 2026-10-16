@@ -859,6 +859,7 @@ function AppInner() {
       {showAudioModal    && (
         <AudioTranscriptionModal
           settings={settings}
+          chatModel={activeModel || settings.model}
           onClose={() => setShowAudioModal(false)}
           onInsert={(text) => {
             if (inputRef.current) {

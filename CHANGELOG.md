@@ -7,6 +7,20 @@ et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 
 ---
 
+## [2.4.7] — 2026-10-16
+
+### Corrigé
+
+- **Synthèse d'une transcription audio** — erreur « model not found » en version de production : la synthèse envoyait `settings.model` (valeur par défaut des paramètres) au lieu du modèle choisi dans le sélecteur de l'application, que le chat utilise. Elle utilise désormais le modèle du chat (`chatModel`), avec `settings.model` en secours ; le message d'erreur indique le modèle demandé.
+- Formatage `rustfmt` des fichiers `llm_safety.rs`, `mcp_pack.rs` et `mcp_stdio.rs` (échec de `cargo fmt --check` en CI).
+- `MCP_IMAGE_INSTRUCTION` n'était jamais transmise au modèle (ajoutée après la copie du message système).
+- Le journal du contexte RAG découpait une ligne à l'octet 120 (panique possible sur un caractère accentué) et consignait du contenu documentaire : supprimé.
+- Les URL de serveurs MCP ne sont plus consignées dans le journal d'appels d'outils.
+- `.env.example` : `MCP_MAX_TURNS=12`, aligné sur la valeur par défaut.
+
+---
+
+
 ## [2.4.6] — 2026-10-16
 
 ### Sécurité

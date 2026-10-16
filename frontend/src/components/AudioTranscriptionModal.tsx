@@ -65,6 +65,10 @@ interface AudioTranscriptionResult {
 
 interface AudioTranscriptionModalProps {
   settings: AppSettings;
+  /// Modèle de chat actuellement choisi dans le sélecteur de l'application (celui du chat).
+  /// La synthèse doit utiliser CE modèle : `settings.model` n'est que la valeur par défaut
+  /// saisie dans les paramètres et peut ne plus exister côté serveur (« model not found »).
+  chatModel?: string;
   onClose: () => void;
   /** Insère le texte formaté dans le champ de message et ferme la modale. */
   onInsert: (text: string) => void;
@@ -137,7 +141,7 @@ function buildPlainTranscript(result: AudioTranscriptionResult, speakerNames: Re
 
 // ── Composant ─────────────────────────────────────────────────────────────────
 
-export function AudioTranscriptionModal({ settings, onClose, onInsert }: AudioTranscriptionModalProps) {
+export function AudioTranscriptionModal({ settings, chatModel, onClose, onInsert }: AudioTranscriptionModalProps) {
   const { toast: toastFn } = useDialog();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -385,7 +389,10 @@ export function AudioTranscriptionModal({ settings, onClose, onInsert }: AudioTr
     if (!template) return;
     setSummarizing(true);
     setSummaryError(null);
+    // Même modèle que le chat (sélecteur de l'application), à défaut celui des paramètres.
+    const summaryModel = (chatModel || settings.model || '').trim();
     try {
+      if (!summaryModel) throw new Error('Aucun modèle de chat sélectionné.');
       const transcript = buildPlainTranscript(result, speakerNames);
       const res = await fetch(`${API_BASE}/api-proxy/api/chat`, {
         method: 'POST',
@@ -401,7 +408,7 @@ export function AudioTranscriptionModal({ settings, onClose, onInsert }: AudioTr
               content: `${template.prompt}\n\n---\n\nTranscription :\n${transcript}`,
             },
           ],
-          model: settings.model,
+          model: summaryModel,
           stream: false,
           space_id: null,
         }),
@@ -412,7 +419,8 @@ export function AudioTranscriptionModal({ settings, onClose, onInsert }: AudioTr
       if (!content) throw new Error('Réponse vide du modèle.');
       setSummaries(prev => [{ id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, label: template.label || 'Résumé', text: content }, ...prev]);
     } catch (e) {
-      setSummaryError((e as Error).message);
+      // Le modèle utilisé est rappelé dans le message : utile pour diagnostiquer « model not found ».
+      setSummaryError(`${(e as Error).message}${summaryModel ? ` (modèle : ${summaryModel})` : ''}`);
     } finally {
       setSummarizing(false);
     }
