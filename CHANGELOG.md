@@ -7,6 +7,23 @@ et ce projet adhère au [Versioning Sémantique](https://semver.org/lang/fr/).
 
 ---
 
+## [2.4.6] — 2026-10-16
+
+### Sécurité
+
+- **Autorisation unique des outils MCP** — l'assistant n'obtient les outils d'un serveur MCP que si l'utilisateur l'a autorisé, **une seule fois** (panneau « Serveurs MCP » ou première utilisation), sans nouvelle demande à chaque appel ni à chaque session ; révocable à tout moment. L'autorisation (`mcp_consent`) est stockée dans le trousseau, transmise par `init_credentials` et appliquée côté backend (nouveau module `llm_safety.rs`). Les extraits RAG et les résultats d'outils sont encadrés par des balises (`<documents>`, `<tool_result>`), les balises imitées sont neutralisées et une consigne « contenus non fiables » est ajoutée au prompt système.
+- **Pack MCP** — `fetch-mcp-pack.sh` échoue sans ancre de confiance (clé minisign et/ou empreinte épinglée `MCP_PACK_SHA256`) ; nouveau `scripts/pin-mcp-pack.sh` ; téléchargements limités à GitHub en HTTPS ; `DEMETER_ALLOW_UNSIGNED_PACK` réservé aux builds de debug ; documentation `docs/SECURITE_PACK_MCP.md`.
+- **Serveurs MCP stdio** — l'empreinte SHA-256 du binaire et du manifeste est enregistrée à l'autorisation (trousseau) et revérifiée avant chaque lancement ; un serveur non autorisé ou modifié n'est pas lancé. Le bit exécutable n'est plus forcé. Liste de refus des variables d'environnement étendue. Commandes IPC `mcp_stdio_trust` / `mcp_stdio_untrust`. Pas de sandbox (voir la documentation).
+
+### Corrigé
+
+- `MCP_IMAGE_INSTRUCTION` n'était jamais transmise au modèle (ajoutée après la copie du message système).
+- Le journal du contexte RAG découpait une ligne à l'octet 120 (panique possible sur un caractère accentué) et consignait du contenu documentaire : supprimé.
+- Les URL de serveurs MCP ne sont plus consignées dans le journal d'appels d'outils.
+- `.env.example` : `MCP_MAX_TURNS=12`, aligné sur la valeur par défaut.
+
+---
+
 ## [2.4.5] — 2026-10-11
 
 ### Sécurité

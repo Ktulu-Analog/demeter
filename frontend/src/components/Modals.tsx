@@ -46,6 +46,10 @@ export interface Settings {
   /// Valeurs de configuration saisies dans le panel MCP, par serveur (id du
   /// manifest) puis par clé de paramètre (ex : mcp_stdio_config['mcp-grist']['GRIST_API_KEY']).
   mcp_stdio_config?: Record<string, Record<string, string>>;
+  /// Serveurs MCP dont l'utilisateur a autorisé l'exécution automatique des outils par
+  /// l'assistant (F-01) : URL pour un MCP distant, « stdio:<id> » pour un MCP local.
+  /// Conservé dans le trousseau ; appliqué côté backend.
+  mcp_consent?: string[];
   font_family?: string;
   font_size?: number;
   audio_summary_prompts?: AudioSummaryPrompt[]; // prompts de résumé auto pour la transcription audio
@@ -82,6 +86,9 @@ export interface StdioServerInfo {
   description?: string;
   available: boolean; // false si aucun binaire pour cette plateforme
   params: StdioParam[];
+  /// État d'autorisation du binaire (F-03) : « trusted » = autorisé et inchangé,
+  /// « untrusted » = jamais autorisé, « modified » = changé depuis l'autorisation.
+  trust?: 'trusted' | 'untrusted' | 'modified';
 }
 
 // ── Préréglages de polices ─────────────────────────────────────────────────────

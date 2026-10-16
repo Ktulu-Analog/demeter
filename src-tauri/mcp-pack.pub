@@ -1,15 +1,2 @@
-# ============================================================================
-# Clé publique minisign du pack de MCP officiels (constat D-13)
-# ============================================================================
-# Demeter ne met à jour le pack MCP en ligne que si `checksums.txt` est signé
-# par la clé ci-dessous. TANT QU'AUCUNE CLÉ N'EST CONFIGURÉE, la mise à jour en
-# ligne est refusée (le pack embarqué dans l'application n'est pas concerné).
-#
-# Mise en place (une seule fois) :
-#   1. minisign -G -p mcp-pack.pub -s ~/.minisign/demeter-mcp-pack.key
-#      (la clé PRIVÉE reste hors de GitHub : poste du mainteneur ou coffre-fort)
-#   2. Remplacer le contenu de CE fichier par le fichier mcp-pack.pub généré
-#      (une ligne « untrusted comment: … » puis la clé publique en base64).
-#   3. À chaque release du pack : scripts/sign-mcp-pack.sh <version> checksums.txt
-#      puis publier checksums.txt.minisig à côté de checksums.txt.
-# Voir docs/SECURITE_PACK_MCP.md.
+untrusted comment: minisign public key 04CB4CAEAF6BC30F
+RWQPw2uvrkzLBGIPzMvc+mLfL9fe9b2vbLyDdHJcI3fhRTc/9Ma/T8NU

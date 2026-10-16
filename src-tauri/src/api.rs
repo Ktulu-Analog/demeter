@@ -288,6 +288,10 @@ pub struct AppState {
     /// Serveurs MCP autorisés : exactement ceux de la configuration enregistrée
     /// par `init_credentials` (D-03). Toute autre valeur reçue en HTTP est ignorée.
     pub mcp_allowed: Arc<RwLock<std::collections::HashSet<String>>>,
+    /// Serveurs MCP dont l'utilisateur a AUTORISÉ l'exécution automatique des outils par le
+    /// LLM (F-01) : sous-ensemble de `mcp_allowed`, transmis par `init_credentials` (IPC).
+    /// Un serveur configuré mais non autorisé ne fournit aucun outil au modèle.
+    pub mcp_consent: Arc<RwLock<std::collections::HashSet<String>>>,
     /// État de sécurité (base chiffrée, trousseau) exposé par `get_security_status`.
     pub security: crate::secrets::SecurityStatus,
 }
@@ -312,6 +316,7 @@ pub fn build_router(
         official_mcp_dir,
         api_token: api_token.clone(),
         mcp_allowed: Arc::new(RwLock::new(std::collections::HashSet::new())),
+        mcp_consent: Arc::new(RwLock::new(std::collections::HashSet::new())),
         security,
     });
 
@@ -927,6 +932,26 @@ async fn rag_status(State(state): State<Arc<AppState>>) -> Json<Value> {
 async fn chat(State(state): State<Arc<AppState>>, Json(mut req): Json<ChatRequest>) -> Response {
     // D-03 : seuls les serveurs MCP de la configuration enregistrée sont utilisables.
     req.mcp_servers = filter_allowed_mcp(&state, std::mem::take(&mut req.mcp_servers)).await;
+    // F-01 : seuls les serveurs que l'utilisateur a autorisés (une fois, dans ses préférences)
+    // fournissent des outils au LLM. Pas de confirmation à chaque appel : l'autorisation est
+    // durable, révocable à tout moment dans le panneau MCP.
+    {
+        let consented = state.mcp_consent.read().await;
+        let (granted, refused) =
+            crate::llm_safety::split_consented(std::mem::take(&mut req.mcp_servers), &consented);
+        if !refused.is_empty() {
+            warn!(
+                "[mcp] {} serveur(s) ignoré(s) faute d'autorisation de l'utilisateur : {}",
+                refused.len(),
+                refused
+                    .iter()
+                    .map(|s| crate::llm_safety::server_label(s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        req.mcp_servers = granted;
+    }
     let creds = state.credentials.read().await.clone();
     // Resolve system prompt
     let mut system_prompt = default_system();
@@ -1139,9 +1164,13 @@ async fn chat(State(state): State<Arc<AppState>>, Json(mut req): Json<ChatReques
         vec![]
     };
 
-    // Ajouter l'instruction MCP image si des serveurs MCP sont configurés
-    if !req.mcp_servers.is_empty() {
+    // Instructions propres aux outils MCP. Elles sont ajoutées AVANT l'envoi : auparavant le
+    // message système était déjà copié dans `messages_payload`, l'ajout n'avait aucun effet.
+    // F-01 : la consigne « contenus non fiables » accompagne tout usage d'outils.
+    if !mcp_tools.is_empty() {
         final_system.push_str(MCP_IMAGE_INSTRUCTION);
+        final_system.push_str(crate::llm_safety::UNTRUSTED_CONTENT_INSTRUCTION);
+        messages_payload[0]["content"] = json!(final_system);
     }
 
     // Si on a des tools MCP, on fait d'abord un appel non-streamé pour gérer les tool_calls
@@ -1310,7 +1339,11 @@ async fn chat(State(state): State<Arc<AppState>>, Json(mut req): Json<ChatReques
                         }
                     };
 
-                    info!("MCP: appel tool {} sur {}", real_tool_name, server);
+                    info!(
+                        "MCP: appel tool {} sur {}",
+                        real_tool_name,
+                        crate::llm_safety::server_label(&server)
+                    );
                     let mcp_result = if let Some(id) = stdio_id(&server) {
                         let env = mcp_env_for(&state, id).await;
                         state
@@ -1340,8 +1373,9 @@ async fn chat(State(state): State<Arc<AppState>>, Json(mut req): Json<ChatReques
                     loop_messages.push(json!({
                         "role": "tool",
                         "tool_call_id": tc_id,
-                        // On ne passe au LLM que le texte (pas le base64)
-                        "content": &mcp_result.text,
+                        // On ne passe au LLM que le texte (pas le base64), encadré comme contenu
+                        // non fiable (F-01) : c'est une donnée, jamais une instruction.
+                        "content": crate::llm_safety::wrap_tool_result(real_tool_name, &mcp_result.text),
                     }));
                 }
             }
@@ -1576,7 +1610,19 @@ async fn mcp_list_tools(
 /// Utilisé par le panel MCP dédié pour construire la liste et les
 /// formulaires de configuration.
 async fn mcp_stdio_list_servers(State(state): State<Arc<AppState>>) -> Response {
-    let servers = state.mcp_stdio.discover().await;
+    // F-03 : chaque serveur est accompagné de son état d'autorisation
+    // (« trusted » | « untrusted » | « modified »).
+    let servers: Vec<Value> = state
+        .mcp_stdio
+        .discover_with_trust()
+        .await
+        .into_iter()
+        .map(|(srv, status)| {
+            let mut v = serde_json::to_value(&srv).unwrap_or_else(|_| json!({}));
+            v["trust"] = json!(status);
+            v
+        })
+        .collect();
     let dir = state.mcp_stdio.dir().await;
     Json(json!({
         "dir": dir,

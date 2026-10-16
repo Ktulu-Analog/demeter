@@ -39,6 +39,8 @@ const MAX_CHUNKS: usize = 4096;
 pub const SETTINGS_BLOB: &str = "settings";
 /// Clé de chiffrement de la base : jamais exposée au frontend.
 pub const DB_KEY_BLOB: &str = "db_key";
+/// Registre des empreintes des serveurs MCP stdio autorisés (F-03) : jamais exposé au frontend.
+pub const MCP_TRUST_BLOB: &str = "mcp_trust";
 
 // ── Abstraction du magasin (permet de tester sans trousseau réel) ─────────────
 

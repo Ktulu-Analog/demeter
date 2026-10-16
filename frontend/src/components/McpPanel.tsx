@@ -14,6 +14,11 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { API_BASE } from '../constants';
 import type { Settings, StdioServerInfo } from './Modals';
+import { McpConsentDialog } from './McpConsentDialog';
+import {
+  ConsentEntry, entryFor, isConsented, stdioKey, stdioId, isStdioKey,
+  trustStdioServer, untrustStdioServer, withConsent, withoutConsent,
+} from '../utils/mcpConsent';
 
 interface McpPanelProps {
   settings: Settings;
@@ -24,7 +29,7 @@ interface McpPanelProps {
   onClose: () => void;
 }
 
-const stdioUrl = (id: string) => `stdio:${id}`;
+const stdioUrl = stdioKey;
 
 export function McpPanel({ settings, onSave, onClose }: McpPanelProps) {
   const [form, setForm] = useState<Settings>({
@@ -42,6 +47,44 @@ export function McpPanel({ settings, onSave, onClose }: McpPanelProps) {
   const [packStatus, setPackStatus] = useState<{ installed: string | null; latest: string | null; update_available: boolean } | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updating, setUpdating]     = useState(false);
+  // F-01 : boîte d'autorisation (une seule à la fois) ; `resolve` reçoit les clés autorisées.
+  const [consentDialog, setConsentDialog] = useState<{
+    entries: ConsentEntry[]; modified: string[]; resolve: (keys: string[]) => void;
+  } | null>(null);
+
+  const askConsent = (entries: ConsentEntry[], modified: string[] = []) =>
+    new Promise<string[]>(resolve => setConsentDialog({ entries, modified, resolve }));
+  const answerConsent = (keys: string[]) => {
+    consentDialog?.resolve(keys);
+    setConsentDialog(null);
+  };
+
+  /// Demande l'autorisation, enregistre l'empreinte des binaires locaux, puis persiste.
+  /// `base` = réglages à partir desquels persister (permet d'activer le serveur dans le même geste).
+  /// Retourne les clés effectivement autorisées.
+  const grantConsent = async (entries: ConsentEntry[], base: Settings, modified: string[] = []): Promise<string[]> => {
+    const asked = await askConsent(entries, modified);
+    const granted: string[] = [];
+    for (const key of asked) {
+      if (isStdioKey(key)) {
+        try { await trustStdioServer(stdioId(key)); granted.push(key); }
+        catch (e) { setInstallMsg(`Autorisation impossible pour « ${stdioId(key)} » : ${String(e)}`); }
+      } else {
+        granted.push(key);
+      }
+    }
+    if (granted.length) {
+      await persist(withConsent(base, granted));
+      await refreshDiscovered();
+    }
+    return granted;
+  };
+
+  const revokeConsent = async (key: string) => {
+    if (isStdioKey(key)) { try { await untrustStdioServer(stdioId(key)); } catch { /* sans effet */ } }
+    await persist(withoutConsent(form, [key]));
+    await refreshDiscovered();
+  };
 
   const refreshDiscovered = useCallback(async () => {
     setLoading(true);
@@ -149,7 +192,20 @@ export function McpPanel({ settings, onSave, onClose }: McpPanelProps) {
         body: JSON.stringify({ id: srv.id }),
       }).catch(() => {});
     } else {
-      await persist({ ...form, mcp_servers: [...(form.mcp_servers || []), { url: stdioUrl(srv.id), alias: srv.name }] });
+      const key = stdioUrl(srv.id);
+      const withServer: Settings = { ...form, mcp_servers: [...(form.mcp_servers || []), { url: key, alias: srv.name }] };
+      // Déjà autorisé et binaire inchangé : on active sans rien redemander.
+      if (isConsented(form, key) && srv.trust === 'trusted') {
+        await persist(withServer);
+      } else {
+        // Première activation (ou binaire modifié) : autorisation explicite, une seule fois.
+        const granted = await grantConsent(
+          [entryFor(key, srv.name, srv.description)], withServer,
+          srv.trust === 'modified' ? [srv.name] : [],
+        );
+        // Refus : le serveur n'est pas activé.
+        if (!granted.length) return;
+      }
     }
   };
 
@@ -181,19 +237,62 @@ export function McpPanel({ settings, onSave, onClose }: McpPanelProps) {
     if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
     if ((form.mcp_servers || []).some(s => s.url === url)) { setNewMcp(''); setNewMcpAlias(''); return; }
     const alias = newMcpAlias.trim() || undefined;
-    persist({ ...form, mcp_servers: [...(form.mcp_servers || []), { url, alias }] });
+    const next: Settings = { ...form, mcp_servers: [...(form.mcp_servers || []), { url, alias }] };
     setNewMcp('');
     setNewMcpAlias('');
+    // Serveur ajouté d'abord (sans outil pour l'assistant tant qu'il n'est pas autorisé), puis demande d'autorisation.
+    persist(next).then(() => grantConsent([entryFor(url, alias)], next));
   };
 
-  const removeMcp = (i: number) =>
-    persist({ ...form, mcp_servers: (form.mcp_servers || []).filter((_, j) => j !== i) });
+  const removeMcp = (i: number) => {
+    const removed = (form.mcp_servers || [])[i];
+    if (removed && isStdioKey(removed.url)) untrustStdioServer(stdioId(removed.url)).catch(() => {});
+    return persist(withoutConsent(
+      { ...form, mcp_servers: (form.mcp_servers || []).filter((_, j) => j !== i) },
+      removed ? [removed.url] : [],
+    ));
+  };
 
   const updateMcpAlias = (i: number, alias: string) =>
     setForm(f => ({
       ...f,
       mcp_servers: (f.mcp_servers || []).map((s, j) => j === i ? { ...s, alias: alias.trim() || undefined } : s),
     }));
+
+  /// Ligne d'état de l'autorisation d'un serveur activé (F-01 / F-03), avec action.
+  const renderConsentRow = (key: string, alias?: string, description?: string, trust?: StdioServerInfo['trust']) => {
+    const consented = isConsented(form, key);
+    const stdio = isStdioKey(key);
+    const modified = stdio && trust === 'modified';
+    const authorized = consented && (!stdio || trust === 'trusted');
+    const entry = entryFor(key, alias, description);
+    if (authorized) {
+      return (
+        <div className="mcp-consent-row mcp-consent-row--ok">
+          <span>✅ Outils autorisés : l'assistant peut les utiliser sans redemander</span>
+          <button type="button" className="mcp-consent-row__btn" onClick={e => { e.preventDefault(); e.stopPropagation(); revokeConsent(key); }}>
+            Retirer
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className={`mcp-consent-row ${modified ? 'mcp-consent-row--danger' : 'mcp-consent-row--warn'}`}>
+        <span>
+          {modified
+            ? '⚠ Programme modifié depuis votre autorisation : il ne sera pas lancé'
+            : '⚠ Non autorisé : ses outils ne sont pas proposés à l\'assistant'}
+        </span>
+        <button
+          type="button"
+          className="mcp-consent-row__btn"
+          onClick={e => { e.preventDefault(); e.stopPropagation(); grantConsent([entry], form, modified ? [entry.label] : []); }}
+        >
+          {modified ? 'Réautoriser…' : 'Autoriser…'}
+        </button>
+      </div>
+    );
+  };
 
   const httpServers = (form.mcp_servers || []).filter(s => !s.url.startsWith('stdio:'));
 
@@ -210,6 +309,14 @@ export function McpPanel({ settings, onSave, onClose }: McpPanelProps) {
 
   return (
     <div className="modal-overlay">
+      {consentDialog && (
+        <McpConsentDialog
+          entries={consentDialog.entries}
+          modified={consentDialog.modified}
+          onConfirm={answerConsent}
+          onCancel={() => answerConsent([])}
+        />
+      )}
       <div className="modal settings-modal mcp-panel-modal">
         <div className="modal-header">
           <div className="modal-header-left"><span className="modal-icon">🔌</span><span className="modal-title">Serveurs MCP</span></div>
@@ -306,6 +413,9 @@ export function McpPanel({ settings, onSave, onClose }: McpPanelProps) {
                           {!srv.available && (
                             <span className="mcp-card__url" style={{ color: '#dc2626' }}>Indisponible sur cette plateforme</span>
                           )}
+                          {enabled && srv.available && renderConsentRow(
+                            stdioUrl(srv.id), srv.name, srv.description, srv.trust,
+                          )}
 
                           {isOpen && srv.params.length > 0 && (
                             <div className="mcp-config-form">
@@ -401,6 +511,7 @@ export function McpPanel({ settings, onSave, onClose }: McpPanelProps) {
                     <button className="mcp-card__remove" onClick={() => removeMcp(i)} title="Supprimer">✕</button>
                   </div>
                   <span className="mcp-card__url" title={srv.url}>{srv.url}</span>
+                  {renderConsentRow(srv.url, srv.alias)}
                 </div>
               </div>
             ))}

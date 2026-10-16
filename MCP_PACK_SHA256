@@ -1,0 +1,4 @@
+# Empreinte SHA-256 épinglée de l'archive du pack MCP (constat F-02).
+# Générée par scripts/pin-mcp-pack.sh — à relire avant de committer.
+# Format : <sha256>  <nom de l'archive>
+8790dde27a8d566dfcdd157e1854adfd142f3c759ed8aa3c46d2e72269fd994a  mcp-pack-0.3.3.zip

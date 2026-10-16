@@ -27,6 +27,10 @@ import type { ChatMessage, Attachment } from './components/Message';
 import { ArtifactsPanel } from './components/ArtifactsPanel';
 import { SettingsModal, McpStatusPanel, AboutModal, McpTooltipButton, type McpEntry } from './components/Modals';
 import { McpPanel } from './components/McpPanel';
+import { McpConsentDialog } from './components/McpConsentDialog';
+import {
+  ConsentEntry, isConsented, isStdioKey, serversInUse, stdioId, trustStdioServer, withConsent,
+} from './utils/mcpConsent';
 import type { Settings } from './components/Modals';
 import { PromptsEditorModal } from './components/PromptsEditorModal';
 import { IngestionModal } from './components/IngestionModal';
@@ -144,6 +148,9 @@ function AppInner() {
           ...(s.mcp_servers || []).map(m => m.url),
           ...(s.web_search_mcp ? [s.web_search_mcp] : []),
         ],
+        // F-01 : serveurs dont l'utilisateur a autorisé l'exécution automatique des outils.
+        // Appliqué côté backend : un serveur absent de cette liste ne fournit aucun outil.
+        mcp_consent: s.mcp_consent || [],
       }
     })?.catch(console.error);
   };
@@ -192,6 +199,13 @@ function AppInner() {
     }
     return p;
   };
+
+  // F-01 : autorisation unique des outils MCP à la première utilisation.
+  const saveSettingsRef = useRef(saveSettings);
+  saveSettingsRef.current = saveSettings;
+  const [mcpConsentReq, setMcpConsentReq] = useState<{ entries: ConsentEntry[]; resolve: (keys: string[]) => void } | null>(null);
+  // Serveurs refusés dans cette session : on ne redemande pas à chaque message.
+  const declinedMcpRef = useRef<Set<string>>(new Set());
 
   const [showSettings,      setShowSettings]      = useState(!settings.endpoint);
   const [showMcpPanel,      setShowMcpPanel]      = useState(false);
@@ -646,6 +660,23 @@ function AppInner() {
     setLoading(true);
     const controller = new AbortController(); abortControllerRef.current = controller;
     try {
+      // F-01 : première utilisation d'un serveur MCP non encore autorisé → une seule demande
+      // (enregistrée durablement). Refus : les autres fonctions restent disponibles, sans ce serveur.
+      const pending = serversInUse(settings, webSearch)
+        .filter(e => !isConsented(settings, e.key) && !declinedMcpRef.current.has(e.key));
+      if (pending.length) {
+        const asked = await new Promise<string[]>(resolve => setMcpConsentReq({ entries: pending, resolve }));
+        pending.filter(e => !asked.includes(e.key)).forEach(e => declinedMcpRef.current.add(e.key));
+        const granted: string[] = [];
+        for (const key of asked) {
+          if (isStdioKey(key)) {
+            try { await trustStdioServer(stdioId(key)); granted.push(key); }
+            catch (e) { toastFn(`Autorisation impossible pour « ${stdioId(key)} » : ${String(e)}`, 'error'); }
+          } else { granted.push(key); }
+        }
+        // Le backend doit connaître l'autorisation AVANT la requête de chat.
+        if (granted.length) await saveSettingsRef.current(withConsent(settings, granted));
+      }
       const assignments   = (() => { try { return JSON.parse(localStorage.getItem('demeter_space_assignments_v2') || '{}'); } catch { return {}; } })();
       const assignedColId: string | null = activeSpace?.id ? (assignments[activeSpace.id] ?? null) : null;
 
@@ -815,6 +846,13 @@ function AppInner() {
   return (
     <div className="layout">
       {showSettings      && <SettingsModal settings={settings} onSave={saveSettings} onClose={() => setShowSettings(false)} />}
+      {mcpConsentReq && (
+        <McpConsentDialog
+          entries={mcpConsentReq.entries}
+          onConfirm={keys => { mcpConsentReq.resolve(keys); setMcpConsentReq(null); }}
+          onCancel={() => { mcpConsentReq.resolve([]); setMcpConsentReq(null); }}
+        />
+      )}
       {showMcpPanel      && <McpPanel settings={settings} onSave={saveSettings} onClose={() => setShowMcpPanel(false)} />}
       {showMcpStatus     && <McpStatusPanel servers={settings.mcp_servers || []} webSearchMcp={settings.web_search_mcp ? { url: settings.web_search_mcp, alias: settings.web_search_mcp_alias } : undefined} webSearchActive={webSearch} onClose={() => setShowMcpStatus(false)} />}
       {showIngestion     && <IngestionModal settings={settings} spaces={spaces} onClose={() => { setShowIngestion(false); refreshCollectionsAndAssignments(); }} onSave={(assignments) => { setSpaceAssignments(assignments); refreshCollectionsAndAssignments(); }} />}

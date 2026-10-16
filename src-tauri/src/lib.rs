@@ -21,6 +21,7 @@ mod config;
 mod db;
 mod extract;
 mod image_fetch;
+mod llm_safety;
 mod mcp;
 mod mcp_pack;
 mod mcp_stdio;
@@ -59,6 +60,11 @@ struct CredentialsPayload {
     /// sont utilisables via l'API HTTP (D-03).
     #[serde(default)]
     mcp_servers: Vec<String>,
+    /// Serveurs MCP dont l'utilisateur a autorisé l'exécution automatique des outils par le
+    /// LLM (F-01) : mêmes identifiants que `mcp_servers`. Un serveur configuré mais absent
+    /// de cette liste ne fournit aucun outil au modèle.
+    #[serde(default)]
+    mcp_consent: Vec<String>,
 }
 
 /// Retourne le jeton secret de l'API locale (D-01). Commande IPC : le jeton
@@ -176,6 +182,27 @@ fn validate_http_url(url: &str) -> Result<(), String> {
     }
 }
 
+/// Autorise un serveur MCP stdio : enregistre les empreintes de son binaire et de son
+/// manifeste (F-03). Commande IPC (jamais HTTP), appelée uniquement après une action
+/// explicite de l'utilisateur dans le panneau MCP.
+#[tauri::command]
+async fn mcp_stdio_trust(
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    state.mcp_stdio.trust_server(&id).await
+}
+
+/// Retire l'autorisation d'un serveur MCP stdio et arrête son processus (F-03).
+#[tauri::command]
+async fn mcp_stdio_untrust(
+    state: tauri::State<'_, std::sync::Arc<AppState>>,
+    id: String,
+) -> Result<(), String> {
+    state.mcp_stdio.untrust_server(&id).await;
+    Ok(())
+}
+
 #[tauri::command]
 async fn init_credentials(
     state: tauri::State<'_, std::sync::Arc<AppState>>,
@@ -212,9 +239,16 @@ async fn init_credentials(
         .filter(|s| !s.is_empty())
         .collect();
 
+    *state.mcp_consent.write().await = payload
+        .mcp_consent
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
     // Aucune donnée sensible (clé, e-mail, chemins) n'est journalisée (D-20).
     tracing::debug!(
-        "init_credentials : {} jeton(s) de collection, {} serveur(s) MCP autorisé(s)",
+        "init_credentials : {} jeton(s) de collection, {} serveur(s) MCP configuré(s), {} avec exécution automatique autorisée",
         state
             .credentials
             .read()
@@ -222,6 +256,7 @@ async fn init_credentials(
             .qdrant_collection_tokens
             .len(),
         state.mcp_allowed.read().await.len(),
+        state.mcp_consent.read().await.len(),
     );
 
     Ok(())
@@ -505,7 +540,9 @@ pub fn run() {
             get_api_token,
             get_security_status,
             secrets_get,
-            secrets_set
+            secrets_set,
+            mcp_stdio_trust,
+            mcp_stdio_untrust
         ])
         .run(tauri::generate_context!())
         .expect("error while running Demeter");

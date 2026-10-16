@@ -36,6 +36,8 @@ use tokio::process::{Child, Command};
 use tokio::sync::{oneshot, Mutex};
 use tracing::{info, warn};
 
+use sha2::{Digest, Sha256};
+
 // ── Manifest ──────────────────────────────────────────────────────────────────
 
 /// Décrit un paramètre de configuration attendu par un serveur MCP stdio
@@ -234,8 +236,13 @@ const PASS_ENV: &[&str] = &[
 ];
 
 /// Une variable déclarée par un manifest est acceptée si son nom est de la forme
-/// MAJUSCULES_CHIFFRES_ET_SOULIGNÉS et n'est pas une variable sensible du système
-/// ou d'un interpréteur (injection de code par variable d'environnement).
+/// MAJUSCULES_CHIFFRES_ET_SOULIGNÉS et n'est pas une variable sensible du système,
+/// d'un interpréteur, d'un runtime ou du réseau (injection de code, détournement
+/// du trafic ou de la confiance TLS par variable d'environnement).
+///
+/// Un serveur MCP n'a besoin que de variables « métier » (clés d'API, identifiants) :
+/// tout nom appartenant aux familles ci-dessous est refusé, ainsi que toute variable
+/// que Demeter transmet déjà elle-même (`PASS_ENV`, comparaison insensible à la casse).
 fn is_safe_env_key(key: &str) -> bool {
     let well_formed = !key.is_empty()
         && key.len() <= 64
@@ -247,34 +254,40 @@ fn is_safe_env_key(key: &str) -> bool {
         return false;
     }
     const DENY_EXACT: &[&str] = &[
-        "PATH",
-        "PATHEXT",
-        "COMSPEC",
-        "SYSTEMROOT",
-        "WINDIR",
-        "HOME",
-        "USERPROFILE",
         "IFS",
         "ENV",
+        "SHELL",
         "BASH_ENV",
-        "NODE_OPTIONS",
-        "PYTHONPATH",
-        "PYTHONHOME",
-        "PYTHONSTARTUP",
-        "PERL5OPT",
-        "PERL5LIB",
-        "RUBYOPT",
-        "RUBYLIB",
-        "JAVA_TOOL_OPTIONS",
-        "_JAVA_OPTIONS",
-        "JDK_JAVA_OPTIONS",
-        "CLASSPATH",
         "GCONV_PATH",
         "LOCPATH",
         "NLSPATH",
         "SSLKEYLOGFILE",
+        "CLASSPATH",
+        "CURL_CA_BUNDLE",
+        "OPENSSL_CONF",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "GOPATH",
+        "GOROOT",
+        "GOFLAGS",
+        "GOPROXY",
+        "GOENV",
+        "GOTOOLCHAIN",
     ];
-    !DENY_EXACT.contains(&key) && !key.starts_with("LD_") && !key.starts_with("DYLD_")
+    // Familles de variables : interpréteurs, runtimes, chargeur dynamique, outils.
+    const DENY_PREFIXES: &[&str] = &[
+        "LD_", "DYLD_", "PYTHON", "NODE_", "NPM_", "JAVA", "_JAVA", "JDK_", "DOTNET_", "COR_",
+        "CORECLR_", "GIT_", "PERL", "RUBY", "LUA_", "BASH_", "OPENSSL_", "SSL_", "CARGO_", "RUST",
+        "PIP_", "UV_",
+    ];
+    let upper = key.to_ascii_uppercase();
+    if PASS_ENV.iter().any(|p| p.eq_ignore_ascii_case(&upper)) {
+        return false;
+    }
+    if DENY_EXACT.contains(&upper.as_str()) {
+        return false;
+    }
+    !DENY_PREFIXES.iter().any(|p| upper.starts_with(p))
 }
 
 /// Lit une ligne en plafonnant sa taille (D-12) : une ligne sans fin ne peut plus
@@ -309,6 +322,117 @@ const MAX_STDOUT_LINE: usize = 32 * 1024 * 1024;
 /// Taille maximale d'une ligne de stderr relayée dans les journaux.
 const MAX_STDERR_LINE: usize = 64 * 1024;
 
+// ── Autorisation d'un binaire : empreintes (constat F-03) ────────────────────
+//
+// Un serveur MCP stdio est un exécutable lancé avec les droits de l'utilisateur.
+// Demeter enregistre, au moment où l'utilisateur AUTORISE un serveur, l'empreinte
+// SHA-256 de son binaire et de son `manifest.json` (qui fixe les arguments). Elle est
+// stockée dans le trousseau du système (nom d'entrée fixe, illisible par le frontend).
+// Avant CHAQUE démarrage, les empreintes sont recalculées et comparées :
+//   - aucune empreinte  → serveur non autorisé : il n'est pas lancé ;
+//   - empreinte modifiée → binaire ou manifeste altéré (ou mis à jour) : il n'est pas
+//     lancé tant que l'utilisateur ne l'a pas de nouveau autorisé.
+// Les mises à jour du pack officiel (signé) ré-enregistrent automatiquement les
+// empreintes des serveurs DÉJÀ autorisés.
+//
+// Limites assumées : seuls le binaire désigné et le manifeste sont couverts (un serveur
+// peut écrire dans son dossier à l'exécution) ; l'intervalle entre le contrôle et le
+// lancement n'est pas atomique ; le processus n'est pas confiné (voir docs).
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TrustRecord {
+    pub bin_sha256: String,
+    pub manifest_sha256: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrustStatus {
+    /// Autorisé, empreintes identiques.
+    Trusted,
+    /// Jamais autorisé.
+    Untrusted,
+    /// Autorisé, mais le binaire ou le manifeste a changé depuis.
+    Modified,
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// SHA-256 d'un fichier, lu par blocs (pas de chargement complet en mémoire).
+pub fn sha256_file(path: &Path) -> std::io::Result<String> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 1 << 20];
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_lower(&hasher.finalize()))
+}
+
+/// Empreintes courantes d'un serveur : binaire résolu + manifest.json.
+pub fn fingerprint(server_dir: &Path, bin: &Path) -> Result<TrustRecord, String> {
+    let bin_sha256 = sha256_file(bin)
+        .map_err(|e| format!("lecture du binaire impossible ({}) : {e}", bin.display()))?;
+    let manifest = server_dir.join("manifest.json");
+    let manifest_sha256 = sha256_file(&manifest)
+        .map_err(|e| format!("lecture du manifeste impossible ({}) : {e}", manifest.display()))?;
+    Ok(TrustRecord {
+        bin_sha256,
+        manifest_sha256,
+    })
+}
+
+/// Compare l'empreinte enregistrée à l'empreinte courante (logique pure, testable).
+pub fn evaluate_trust(recorded: Option<&TrustRecord>, current: &TrustRecord) -> TrustStatus {
+    match recorded {
+        None => TrustStatus::Untrusted,
+        Some(r) if r == current => TrustStatus::Trusted,
+        Some(_) => TrustStatus::Modified,
+    }
+}
+
+fn load_trust_blocking() -> HashMap<String, TrustRecord> {
+    match crate::secrets::get_blob(crate::secrets::MCP_TRUST_BLOB) {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_else(|e| {
+            warn!("MCP stdio: registre d'autorisations illisible, ignoré : {e}");
+            HashMap::new()
+        }),
+        Ok(None) => HashMap::new(),
+        Err(e) => {
+            warn!("MCP stdio: registre d'autorisations inaccessible (trousseau) : {e}");
+            HashMap::new()
+        }
+    }
+}
+
+fn save_trust_blocking(map: &HashMap<String, TrustRecord>) -> Result<(), String> {
+    let json = serde_json::to_string(map).map_err(|e| e.to_string())?;
+    crate::secrets::set_blob(crate::secrets::MCP_TRUST_BLOB, &json)
+}
+
+#[derive(Default)]
+struct TrustState {
+    loaded: bool,
+    map: HashMap<String, TrustRecord>,
+}
+
+/// Enregistre le registre dans le trousseau. En cas d'échec, l'autorisation reste valable
+/// pour la session en cours (mémoire) mais devra être redonnée au prochain lancement.
+async fn persist_trust(map: HashMap<String, TrustRecord>) {
+    match tokio::task::spawn_blocking(move || save_trust_blocking(&map)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => warn!("MCP stdio: autorisations non persistées (trousseau) : {e}"),
+        Err(e) => warn!("MCP stdio: autorisations non persistées : {e}"),
+    }
+}
+
 // ── Process en vie ───────────────────────────────────────────────────────────
 
 struct RunningProcess {
@@ -326,6 +450,8 @@ struct RunningProcess {
 pub struct StdioManager {
     mcp_dir: Arc<tokio::sync::RwLock<Option<PathBuf>>>,
     processes: Arc<Mutex<HashMap<String, Arc<Mutex<RunningProcess>>>>>,
+    /// Empreintes des serveurs autorisés (F-03), chargées paresseusement du trousseau.
+    trust: Arc<Mutex<TrustState>>,
 }
 
 impl Default for StdioManager {
@@ -339,6 +465,7 @@ impl StdioManager {
         Self {
             mcp_dir: Arc::new(tokio::sync::RwLock::new(None)),
             processes: Arc::new(Mutex::new(HashMap::new())),
+            trust: Arc::new(Mutex::new(TrustState::default())),
         }
     }
 
@@ -354,6 +481,111 @@ impl StdioManager {
         if changed {
             self.stop_all().await;
             *self.mcp_dir.write().await = dir;
+        }
+    }
+
+    // ── Autorisation des binaires (F-03) ──────────────────────────────────────
+
+    async fn ensure_trust_loaded(&self) {
+        let mut st = self.trust.lock().await;
+        if !st.loaded {
+            st.map = tokio::task::spawn_blocking(load_trust_blocking)
+                .await
+                .unwrap_or_default();
+            st.loaded = true;
+        }
+    }
+
+    /// Empreintes courantes d'un serveur découvert (calcul bloquant déporté).
+    async fn current_fingerprint(server: &DiscoveredServer) -> Result<TrustRecord, String> {
+        let bin = resolve_bin(server).ok_or_else(|| {
+            format!("Binaire introuvable ou hors du dossier du serveur '{}'", server.manifest.id)
+        })?;
+        let dir = server.dir.clone();
+        tokio::task::spawn_blocking(move || fingerprint(&dir, &bin))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// État d'autorisation d'un serveur découvert.
+    pub async fn trust_status_of(&self, server: &DiscoveredServer) -> TrustStatus {
+        let Ok(current) = Self::current_fingerprint(server).await else {
+            return TrustStatus::Untrusted;
+        };
+        self.ensure_trust_loaded().await;
+        let st = self.trust.lock().await;
+        evaluate_trust(st.map.get(&server.manifest.id), &current)
+    }
+
+    /// Serveurs découverts avec leur état d'autorisation (pour le panneau MCP).
+    pub async fn discover_with_trust(&self) -> Vec<(DiscoveredServer, TrustStatus)> {
+        let mut out = Vec::new();
+        for srv in self.discover().await {
+            let status = if srv.available {
+                self.trust_status_of(&srv).await
+            } else {
+                TrustStatus::Untrusted
+            };
+            out.push((srv, status));
+        }
+        out
+    }
+
+    /// Autorise un serveur : enregistre les empreintes de son binaire et de son manifeste
+    /// telles qu'elles sont MAINTENANT. À appeler uniquement sur action explicite de l'utilisateur.
+    pub async fn trust_server(&self, id: &str) -> Result<(), String> {
+        let server = self
+            .discover()
+            .await
+            .into_iter()
+            .find(|s| s.manifest.id == id)
+            .ok_or_else(|| format!("Serveur MCP stdio inconnu : {id}"))?;
+        if !server.available {
+            return Err(format!("Aucun binaire disponible pour '{id}' sur cette plateforme"));
+        }
+        let current = Self::current_fingerprint(&server).await?;
+        self.ensure_trust_loaded().await;
+        let snapshot = {
+            let mut st = self.trust.lock().await;
+            st.map.insert(id.to_string(), current);
+            st.map.clone()
+        };
+        persist_trust(snapshot).await;
+        info!("MCP stdio: serveur '{}' autorisé (empreintes enregistrées)", id);
+        Ok(())
+    }
+
+    /// Retire l'autorisation d'un serveur et arrête son processus.
+    pub async fn untrust_server(&self, id: &str) {
+        self.ensure_trust_loaded().await;
+        let snapshot = {
+            let mut st = self.trust.lock().await;
+            st.map.remove(id);
+            st.map.clone()
+        };
+        persist_trust(snapshot).await;
+        self.stop(id).await;
+        info!("MCP stdio: autorisation de '{}' retirée", id);
+    }
+
+    /// Contrôle exécuté avant chaque démarrage : le serveur doit être autorisé ET inchangé.
+    async fn verify_trust(&self, server: &DiscoveredServer) -> Result<(), String> {
+        #[cfg(debug_assertions)]
+        if std::env::var("DEMETER_MCP_SKIP_TRUST").map(|v| v == "1").unwrap_or(false) {
+            warn!("MCP stdio: contrôle d'autorisation désactivé (DEMETER_MCP_SKIP_TRUST=1, debug)");
+            return Ok(());
+        }
+        let id = &server.manifest.id;
+        match self.trust_status_of(server).await {
+            TrustStatus::Trusted => Ok(()),
+            TrustStatus::Untrusted => Err(format!(
+                "Le serveur MCP '{id}' n'est pas autorisé. Autorisez-le dans le panneau « Serveurs MCP »."
+            )),
+            TrustStatus::Modified => Err(format!(
+                "Le binaire ou le manifeste du serveur MCP '{id}' a changé depuis son autorisation \
+                 (mise à jour ou altération). Vérifiez-le puis autorisez-le de nouveau dans le \
+                 panneau « Serveurs MCP »."
+            )),
         }
     }
 
@@ -409,6 +641,42 @@ impl StdioManager {
                 }
             }
             installed.push(name.to_string_lossy().to_string());
+        }
+
+        // F-03 : les serveurs DÉJÀ autorisés le restent après une installation/mise à jour du
+        // pack officiel (contenu embarqué dans l'application, ou pack dont la signature a été
+        // vérifiée par `mcp_pack`) : leurs empreintes sont ré-enregistrées. Un serveur jamais
+        // autorisé reste non autorisé.
+        self.ensure_trust_loaded().await;
+        let previously: std::collections::HashSet<String> =
+            self.trust.lock().await.map.keys().cloned().collect();
+        if !previously.is_empty() {
+            let mut refreshed: Vec<(String, TrustRecord)> = Vec::new();
+            for srv in discover(&target) {
+                let dir_name = srv
+                    .dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if srv.available
+                    && installed.contains(&dir_name)
+                    && previously.contains(&srv.manifest.id)
+                {
+                    if let Ok(cur) = Self::current_fingerprint(&srv).await {
+                        refreshed.push((srv.manifest.id.clone(), cur));
+                    }
+                }
+            }
+            if !refreshed.is_empty() {
+                let snapshot = {
+                    let mut st = self.trust.lock().await;
+                    for (id, rec) in refreshed {
+                        st.map.insert(id, rec);
+                    }
+                    st.map.clone()
+                };
+                persist_trust(snapshot).await;
+            }
         }
 
         // Trace la version du pack qui vient d'être installée, pour pouvoir
@@ -487,14 +755,21 @@ impl StdioManager {
         let bin = resolve_bin(&server)
             .ok_or_else(|| format!("Binaire introuvable pour le serveur '{id}'"))?;
 
+        // F-03 : le serveur doit avoir été autorisé par l'utilisateur et être inchangé.
+        self.verify_trust(&server).await?;
+
+        // F-03 : on ne force plus le bit exécutable. Un fichier non exécutable est signalé
+        // (l'ancien comportement rendait exécutable n'importe quel fichier désigné par un manifeste).
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             if let Ok(meta) = std::fs::metadata(&bin) {
-                let mut perms = meta.permissions();
-                if perms.mode() & 0o111 == 0 {
-                    perms.set_mode(perms.mode() | 0o111);
-                    let _ = std::fs::set_permissions(&bin, perms);
+                if meta.permissions().mode() & 0o111 == 0 {
+                    return Err(format!(
+                        "Le binaire de '{id}' n'est pas exécutable ({}). Vérifiez son origine puis \
+                         rendez-le exécutable (chmod +x) si vous lui faites confiance.",
+                        bin.display()
+                    ));
                 }
             }
         }
@@ -828,6 +1103,93 @@ mod tests {
         assert!(bin_within_dir(&dir, "/bin/sh").is_none());
         #[cfg(windows)]
         assert!(bin_within_dir(&dir, "C:\\Windows\\System32\\cmd.exe").is_none());
+    }
+
+    #[test]
+    fn variables_d_environnement_dangereuses_refusees() {
+        for bad in [
+            "HTTPS_PROXY",
+            "HTTP_PROXY",
+            "SSL_CERT_FILE",
+            "NODE_EXTRA_CA_CERTS",
+            "REQUESTS_CA_BUNDLE",
+            "NODE_PATH",
+            "PYTHONWARNINGS",
+            "DOTNET_STARTUP_HOOKS",
+            "GIT_SSH_COMMAND",
+            "OPENSSL_CONF",
+            "GOFLAGS",
+            "TMPDIR",
+            "APPDATA",
+            "LD_LIBRARY_PATH",
+            "RUBYOPT",
+            "PERL5OPT",
+        ] {
+            assert!(!is_safe_env_key(bad), "{bad} devrait être refusée");
+        }
+        for ok in ["GRIST_API_KEY", "GOOGLE_API_KEY", "PISTE_CLIENT_SECRET", "MCP_BASE_URL"] {
+            assert!(is_safe_env_key(ok), "{ok} devrait être acceptée");
+        }
+    }
+
+    // ── F-03 : empreintes ────────────────────────────────────────────────────
+
+    fn tmp_server_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("demeter-trust-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(d.join("bin")).unwrap();
+        std::fs::write(d.join("manifest.json"), b"{\"id\":\"mcp-x\"}").unwrap();
+        std::fs::write(d.join("bin/srv"), b"binaire v1").unwrap();
+        d
+    }
+
+    #[test]
+    fn sha256_connu() {
+        let d = tmp_server_dir("sha");
+        let f = d.join("vide");
+        std::fs::write(&f, b"").unwrap();
+        assert_eq!(
+            sha256_file(&f).unwrap(),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let g = d.join("abc");
+        std::fs::write(&g, b"abc").unwrap();
+        assert_eq!(
+            sha256_file(&g).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn autorisation_detecte_modification_du_binaire_et_du_manifeste() {
+        let d = tmp_server_dir("trust");
+        let bin = d.join("bin/srv");
+        let rec = fingerprint(&d, &bin).unwrap();
+
+        // jamais autorisé
+        assert_eq!(evaluate_trust(None, &rec), TrustStatus::Untrusted);
+        // autorisé et inchangé
+        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Trusted);
+
+        // binaire remplacé
+        std::fs::write(&bin, b"binaire v2 malveillant").unwrap();
+        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Modified);
+
+        // retour à l'original → de nouveau autorisé
+        std::fs::write(&bin, b"binaire v1").unwrap();
+        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Trusted);
+
+        // manifeste modifié (arguments détournés)
+        std::fs::write(d.join("manifest.json"), b"{\"id\":\"mcp-x\",\"args\":[\"--evil\"]}").unwrap();
+        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Modified);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn empreinte_impossible_sans_binaire() {
+        let d = tmp_server_dir("nobin");
+        assert!(fingerprint(&d, &d.join("bin/absent")).is_err());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

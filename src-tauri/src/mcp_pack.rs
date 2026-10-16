@@ -165,11 +165,34 @@ pub async fn download_and_install(
     result
 }
 
+/// F-02 : les assets d'une release ne sont téléchargés que depuis GitHub, en HTTPS.
+/// (L'authenticité reste garantie par la signature minisign ; ce contrôle évite en plus
+/// qu'une réponse d'API altérée ne fasse contacter un hôte arbitraire.)
+fn is_trusted_download_url(url: &str) -> bool {
+    let Ok(u) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if u.scheme() != "https" || !u.username().is_empty() || u.password().is_some() {
+        return false;
+    }
+    match u.host_str() {
+        Some(h) => {
+            h == "github.com"
+                || h == "api.github.com"
+                || h.ends_with(".githubusercontent.com")
+        }
+        None => false,
+    }
+}
+
 async fn download(
     client: &reqwest::Client,
     url: &str,
     max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
+    if !is_trusted_download_url(url) {
+        return Err("Téléchargement refusé : l'adresse n'est pas une adresse GitHub en HTTPS".into());
+    }
     let resp = client
         .get(url)
         .header("User-Agent", "Demeter")
@@ -292,9 +315,12 @@ async fn ensure_signed(
     version: &str,
     checksums: &[u8],
 ) -> Result<(), String> {
-    let allow_unsigned = std::env::var("DEMETER_ALLOW_UNSIGNED_PACK")
-        .map(|v| v == "1")
-        .unwrap_or(false);
+    // F-02 : la dérogation « pack non signé » n'existe QUE dans les builds de debug. Dans une
+    // version distribuée, aucune variable d'environnement ne peut désactiver la vérification.
+    let allow_unsigned = cfg!(debug_assertions)
+        && std::env::var("DEMETER_ALLOW_UNSIGNED_PACK")
+            .map(|v| v == "1")
+            .unwrap_or(false);
     let Some(key) = parse_public_key_file(EMBEDDED_PUBLIC_KEY_FILE) else {
         if allow_unsigned {
             tracing::warn!(
@@ -303,9 +329,10 @@ async fn ensure_signed(
             return Ok(());
         }
         return Err(
-            "Mise à jour en ligne refusée : aucune clé publique de signature n'est configurée \
-             dans cette version de Demeter (src-tauri/mcp-pack.pub). Le pack embarqué reste \
-             utilisable. Voir docs/SECURITE_PACK_MCP.md."
+            "Mise à jour en ligne refusée : cette version de Demeter ne contient pas de clé \
+             publique de signature (src-tauri/mcp-pack.pub), elle ne peut donc pas vérifier \
+             l'authenticité du pack. Le pack embarqué dans l'application, vérifié à la \
+             compilation, reste utilisable. Voir docs/SECURITE_PACK_MCP.md."
                 .to_string(),
         );
     };
@@ -411,6 +438,27 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telechargement_limite_a_github_https() {
+        assert!(is_trusted_download_url(
+            "https://github.com/Ktulu-Analog/demeter-mcp-pack/releases/download/v1.0.0/x.zip"
+        ));
+        assert!(is_trusted_download_url(
+            "https://release-assets.githubusercontent.com/github-production-release-asset/1"
+        ));
+        for bad in [
+            "http://github.com/x.zip",
+            "https://evil.example/x.zip",
+            "https://github.com.evil.example/x.zip",
+            "https://evilgithub.com/x.zip",
+            "https://user:pw@github.com/x.zip",
+            "ftp://github.com/x.zip",
+            "pas une url",
+        ] {
+            assert!(!is_trusted_download_url(bad), "{bad}");
+        }
+    }
     use std::io::Write;
 
     fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {

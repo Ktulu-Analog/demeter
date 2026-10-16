@@ -26,6 +26,7 @@ export const SECRET_FIELDS = [
   'mcp_stdio_config',
   'mcp_servers',      // les URL peuvent embarquer un jeton
   'web_search_mcp',
+  'mcp_consent',      // décision de sécurité de l'utilisateur (F-01)
 ] as const satisfies readonly (keyof Settings)[];
 
 type SecretField = (typeof SECRET_FIELDS)[number];

@@ -44,12 +44,48 @@ echo "📦 Récupération de $PACK_REPO @ $VERSION"
 curl -fsSL "${BASE_URL}/${ARCHIVE}"        -o "$TMP_DIR/${ARCHIVE}"
 curl -fsSL "${BASE_URL}/checksums.txt"     -o "$TMP_DIR/checksums.txt"
 
-# ── Authenticité (D-13) ──────────────────────────────────────────────────────
-# Si une clé publique minisign est configurée dans src-tauri/mcp-pack.pub,
-# checksums.txt DOIT être signé (checksums.txt.minisig). Sans clé configurée,
-# seul le SHA-256 de la même release est vérifié (intégrité, pas authenticité).
+# ── Authenticité (D-13, F-02) ────────────────────────────────────────────────
+# Le SHA-256 de checksums.txt est publié dans la MÊME release que l'archive : il
+# prouve l'intégrité du transfert, PAS l'authenticité (qui contrôle la release remplace
+# les deux). L'authenticité repose donc sur au moins UNE des deux ancres de confiance
+# gérées dans CE dépôt :
+#   1. une signature minisign : clé publique dans src-tauri/mcp-pack.pub, signature
+#      checksums.txt.minisig dans la release ;
+#   2. une EMPREINTE ÉPINGLÉE : fichier MCP_PACK_SHA256 (SHA-256 de l'archive),
+#      validé en revue de code lors de chaque changement de version.
+# Si aucune des deux n'est en place, le build ÉCHOUE (défaillance fermée). Les deux
+# peuvent coexister : dans ce cas, les deux contrôles sont exigés.
+# Dérogation explicite et bruyante, pour le développement seulement :
+#   MCP_PACK_ALLOW_UNSIGNED=1
 PUBFILE="$ROOT/src-tauri/mcp-pack.pub"
 PUBKEY="$(grep -v -e '^[[:space:]]*#' -e '^untrusted comment:' -e '^[[:space:]]*$' "$PUBFILE" 2>/dev/null | head -n1 || true)"
+
+PIN_FILE="$ROOT/MCP_PACK_SHA256"
+PIN_EXPECTED=""
+if [[ -f "$PIN_FILE" ]]; then
+  PIN_HASH="$(awk 'NF && $1 !~ /^#/ {print tolower($1); exit}' "$PIN_FILE")"
+  PIN_NAME="$(awk 'NF && $1 !~ /^#/ {print $2; exit}' "$PIN_FILE" | sed 's/^\*//')"
+  if [[ -n "$PIN_HASH" && "$PIN_NAME" == "$ARCHIVE" ]]; then
+    PIN_EXPECTED="$PIN_HASH"
+  else
+    echo "❌ MCP_PACK_SHA256 ne correspond pas à ${ARCHIVE} (épinglé : '${PIN_NAME:-?}')." >&2
+    echo "   MCP_PACK_VERSION a changé : relancez ./scripts/pin-mcp-pack.sh et faites relire le diff." >&2
+    exit 1
+  fi
+fi
+
+if [[ -z "$PUBKEY" && -z "$PIN_EXPECTED" ]]; then
+  if [[ "${MCP_PACK_ALLOW_UNSIGNED:-}" == "1" ]]; then
+    echo "⚠️  MCP_PACK_ALLOW_UNSIGNED=1 : AUCUNE vérification d'authenticité (ni clé minisign, ni empreinte épinglée)." >&2
+  else
+    echo "❌ Authenticité du pack MCP non vérifiable : ni clé publique (src-tauri/mcp-pack.pub), ni empreinte épinglée (MCP_PACK_SHA256)." >&2
+    echo "   Les binaires de ce pack seront exécutés avec vos droits : le build est refusé." >&2
+    echo "   → Épingler la version actuelle :  ./scripts/pin-mcp-pack.sh   (puis relire et committer MCP_PACK_SHA256)" >&2
+    echo "   → ou configurer une clé minisign : voir docs/SECURITE_PACK_MCP.md" >&2
+    exit 1
+  fi
+fi
+
 if [[ -n "$PUBKEY" ]]; then
   if [[ "${MCP_PACK_ALLOW_UNSIGNED:-}" == "1" ]]; then
     echo "⚠️  MCP_PACK_ALLOW_UNSIGNED=1 : signature NON vérifiée." >&2
@@ -67,8 +103,6 @@ if [[ -n "$PUBKEY" ]]; then
     fi
     echo "  ✅ Signature OK"
   fi
-else
-  echo "ℹ️  Aucune clé publique configurée (src-tauri/mcp-pack.pub) : authenticité non vérifiée." >&2
 fi
 
 echo "🔒 Vérification du checksum SHA-256…"
@@ -91,6 +125,17 @@ if [[ "$EXPECTED" != "$ACTUAL" ]]; then
   exit 1
 fi
 echo "  ✅ Checksum OK"
+
+if [[ -n "$PIN_EXPECTED" ]]; then
+  if [[ "$PIN_EXPECTED" != "$ACTUAL" ]]; then
+    echo "❌ Empreinte épinglée (MCP_PACK_SHA256) non respectée pour ${ARCHIVE}" >&2
+    echo "   épinglée : $PIN_EXPECTED" >&2
+    echo "   obtenue  : $ACTUAL" >&2
+    echo "   L'archive de la release a changé depuis l'épinglage (tag déplacé ou release altérée)." >&2
+    exit 1
+  fi
+  echo "  ✅ Empreinte épinglée OK"
+fi
 
 echo "📂 Déballage dans $DEST"
 rm -rf "$DEST"

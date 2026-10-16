@@ -5226,3 +5226,35 @@ button.mcp-pill-header:hover {
   padding: 5px 10px;
   font-size: 12px;
 }
+
+/* ── Autorisation des outils MCP (F-01 / F-03) ───────────────────────────── */
+.mcp-consent-modal { max-width: 560px; width: 92vw; }
+.mcp-consent-text { font-size: 13px; line-height: 1.55; margin: 0 0 12px; color: var(--text-primary); }
+.mcp-consent-warning {
+  font-size: 12.5px; line-height: 1.5; padding: 10px 12px; margin-bottom: 12px;
+  border-radius: 8px; border: 1px solid #f5c26b; background: rgba(245, 158, 11, .10);
+  color: var(--text-primary);
+}
+.mcp-consent-warning--danger { border-color: #e48a8a; background: rgba(220, 38, 38, .09); }
+.mcp-consent-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.mcp-consent-item {
+  display: flex; align-items: center; gap: 10px; padding: 8px 10px; cursor: pointer;
+  border: 1px solid var(--border-light); border-radius: 8px;
+}
+.mcp-consent-item:hover { border-color: var(--green-mid); }
+.mcp-consent-item__text { display: flex; flex-direction: column; min-width: 0; }
+.mcp-consent-item__name { font-size: 13px; font-weight: 600; }
+.mcp-consent-item__detail { font-size: 11.5px; color: var(--text-secondary); }
+
+.mcp-consent-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11.5px;
+  color: var(--text-secondary);
+}
+.mcp-consent-row--ok { color: var(--green-dark); }
+.mcp-consent-row--warn { color: #b45309; }
+.mcp-consent-row--danger { color: #b91c1c; }
+.mcp-consent-row__btn {
+  margin-left: auto; padding: 2px 9px; font-size: 11px; cursor: pointer;
+  background: transparent; color: inherit; border: 1px solid currentColor; border-radius: 5px;
+}
+.mcp-consent-row__btn:hover { opacity: .75; }
