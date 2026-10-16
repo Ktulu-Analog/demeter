@@ -1,0 +1,54 @@
+name: Installer minisign
+description: >
+  Installe minisign (version et SHA-256 épinglés) pour que scripts/fetch-mcp-pack.sh
+  puisse vérifier la signature du pack MCP. Aucune clé privée n'est utilisée : seule la
+  clé publique, versionnée dans src-tauri/mcp-pack.pub, sert à vérifier.
+
+runs:
+  using: composite
+  steps:
+    - name: Télécharger et vérifier minisign 0.12
+      shell: bash
+      run: |
+        set -euo pipefail
+        V=0.12
+        B="https://github.com/jedisct1/minisign/releases/download/$V"
+        case "$RUNNER_ARCH" in
+          X64)   A=x86_64 ;;
+          ARM64) A=aarch64 ;;
+          *) echo "Architecture non prise en charge : $RUNNER_ARCH" >&2; exit 1 ;;
+        esac
+
+        # macOS : le binaire publié est arm64 uniquement ; Intel passe par Homebrew.
+        if [[ "$RUNNER_OS" == "macOS" && "$A" != "aarch64" ]]; then
+          brew install minisign
+          minisign -v
+          exit 0
+        fi
+
+        case "$RUNNER_OS" in
+          Linux)   F="minisign-$V-linux.tar.gz"; H=9a599b48ba6eb7b1e80f12f36b94ceca7c00b7a5173c95c3efc88d9822957e73 ;;
+          macOS)   F="minisign-$V-macos.zip";    H=89000b19535765f9cffc65a65d64a820f433ef6db8020667f7570e06bf6aac63 ;;
+          Windows) F="minisign-$V-win64.zip";    H=37b600344e20c19314b2e82813db2bfdcc408b77b876f7727889dbd46d539479 ;;
+          *) echo "Système non pris en charge : $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        DIR="$RUNNER_TEMP/minisign"
+        mkdir -p "$DIR"
+        cd "$DIR"
+        curl -fsSL -o "$F" "$B/$F"
+
+        # Empreinte épinglée : une archive altérée fait échouer l'étape.
+        echo "$H  $F" > sum.txt
+        if command -v sha256sum >/dev/null 2>&1; then sha256sum -c sum.txt; else shasum -a 256 -c sum.txt; fi
+
+        case "$RUNNER_OS" in
+          Linux)   tar xzf "$F"; BIN="$PWD/minisign-linux/$A" ;;
+          macOS)   unzip -oq "$F"; chmod +x minisign; BIN="$PWD" ;;
+          Windows) unzip -oq "$F"; BIN="$(cygpath -w "$PWD/minisign-win64/$A")" ;;
+        esac
+        echo "$BIN" >> "$GITHUB_PATH"
+
+    - name: Vérifier que minisign est utilisable
+      shell: bash
+      run: minisign -v

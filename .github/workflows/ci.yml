@@ -90,3 +90,19 @@ jobs:
       - name: Tests
         working-directory: src-tauri
         run: cargo test --no-default-features
+
+  # ── Pack MCP : signature + empreinte épinglée (F-02) ─────────────────────────
+  # Détecte dès la PR une release du pack non signée, une signature invalide, un
+  # MCP_PACK_VERSION qui ne correspond plus à MCP_PACK_SHA256, ou un tag déplacé :
+  # sans cela, l'échec n'apparaîtrait qu'au moment de publier une version.
+  mcp-pack:
+    name: Pack MCP (signature + empreinte)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Installer minisign
+        uses: ./.github/actions/install-minisign
+
+      - name: Vérifier le pack MCP
+        run: bash scripts/fetch-mcp-pack.sh --force

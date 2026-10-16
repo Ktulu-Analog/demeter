@@ -25,6 +25,13 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      # F-02 : le build vérifie la signature minisign du pack MCP (clé publique versionnée
+      # dans src-tauri/mcp-pack.pub) ET l'empreinte épinglée (MCP_PACK_SHA256).
+      # Le pack est récupéré par `beforeBuildCommand` (npm run fetch-mcp-pack).
+      # Aucun secret requis : la clé privée reste sur le poste du mainteneur du pack.
+      - name: Installer minisign
+        uses: ./.github/actions/install-minisign
+
       - name: Setup Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
