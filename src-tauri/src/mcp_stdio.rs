@@ -381,8 +381,12 @@ pub fn fingerprint(server_dir: &Path, bin: &Path) -> Result<TrustRecord, String>
     let bin_sha256 = sha256_file(bin)
         .map_err(|e| format!("lecture du binaire impossible ({}) : {e}", bin.display()))?;
     let manifest = server_dir.join("manifest.json");
-    let manifest_sha256 = sha256_file(&manifest)
-        .map_err(|e| format!("lecture du manifeste impossible ({}) : {e}", manifest.display()))?;
+    let manifest_sha256 = sha256_file(&manifest).map_err(|e| {
+        format!(
+            "lecture du manifeste impossible ({}) : {e}",
+            manifest.display()
+        )
+    })?;
     Ok(TrustRecord {
         bin_sha256,
         manifest_sha256,
@@ -499,7 +503,10 @@ impl StdioManager {
     /// Empreintes courantes d'un serveur découvert (calcul bloquant déporté).
     async fn current_fingerprint(server: &DiscoveredServer) -> Result<TrustRecord, String> {
         let bin = resolve_bin(server).ok_or_else(|| {
-            format!("Binaire introuvable ou hors du dossier du serveur '{}'", server.manifest.id)
+            format!(
+                "Binaire introuvable ou hors du dossier du serveur '{}'",
+                server.manifest.id
+            )
         })?;
         let dir = server.dir.clone();
         tokio::task::spawn_blocking(move || fingerprint(&dir, &bin))
@@ -541,7 +548,9 @@ impl StdioManager {
             .find(|s| s.manifest.id == id)
             .ok_or_else(|| format!("Serveur MCP stdio inconnu : {id}"))?;
         if !server.available {
-            return Err(format!("Aucun binaire disponible pour '{id}' sur cette plateforme"));
+            return Err(format!(
+                "Aucun binaire disponible pour '{id}' sur cette plateforme"
+            ));
         }
         let current = Self::current_fingerprint(&server).await?;
         self.ensure_trust_loaded().await;
@@ -551,7 +560,10 @@ impl StdioManager {
             st.map.clone()
         };
         persist_trust(snapshot).await;
-        info!("MCP stdio: serveur '{}' autorisé (empreintes enregistrées)", id);
+        info!(
+            "MCP stdio: serveur '{}' autorisé (empreintes enregistrées)",
+            id
+        );
         Ok(())
     }
 
@@ -571,7 +583,10 @@ impl StdioManager {
     /// Contrôle exécuté avant chaque démarrage : le serveur doit être autorisé ET inchangé.
     async fn verify_trust(&self, server: &DiscoveredServer) -> Result<(), String> {
         #[cfg(debug_assertions)]
-        if std::env::var("DEMETER_MCP_SKIP_TRUST").map(|v| v == "1").unwrap_or(false) {
+        if std::env::var("DEMETER_MCP_SKIP_TRUST")
+            .map(|v| v == "1")
+            .unwrap_or(false)
+        {
             warn!("MCP stdio: contrôle d'autorisation désactivé (DEMETER_MCP_SKIP_TRUST=1, debug)");
             return Ok(());
         }
@@ -1127,7 +1142,12 @@ mod tests {
         ] {
             assert!(!is_safe_env_key(bad), "{bad} devrait être refusée");
         }
-        for ok in ["GRIST_API_KEY", "GOOGLE_API_KEY", "PISTE_CLIENT_SECRET", "MCP_BASE_URL"] {
+        for ok in [
+            "GRIST_API_KEY",
+            "GOOGLE_API_KEY",
+            "PISTE_CLIENT_SECRET",
+            "MCP_BASE_URL",
+        ] {
             assert!(is_safe_env_key(ok), "{ok} devrait être acceptée");
         }
     }
@@ -1135,7 +1155,10 @@ mod tests {
     // ── F-03 : empreintes ────────────────────────────────────────────────────
 
     fn tmp_server_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("demeter-trust-{tag}-{}", uuid::Uuid::new_v4().simple()));
+        let d = std::env::temp_dir().join(format!(
+            "demeter-trust-{tag}-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         std::fs::create_dir_all(d.join("bin")).unwrap();
         std::fs::write(d.join("manifest.json"), b"{\"id\":\"mcp-x\"}").unwrap();
         std::fs::write(d.join("bin/srv"), b"binaire v1").unwrap();
@@ -1169,19 +1192,35 @@ mod tests {
         // jamais autorisé
         assert_eq!(evaluate_trust(None, &rec), TrustStatus::Untrusted);
         // autorisé et inchangé
-        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Trusted);
+        assert_eq!(
+            evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()),
+            TrustStatus::Trusted
+        );
 
         // binaire remplacé
         std::fs::write(&bin, b"binaire v2 malveillant").unwrap();
-        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Modified);
+        assert_eq!(
+            evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()),
+            TrustStatus::Modified
+        );
 
         // retour à l'original → de nouveau autorisé
         std::fs::write(&bin, b"binaire v1").unwrap();
-        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Trusted);
+        assert_eq!(
+            evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()),
+            TrustStatus::Trusted
+        );
 
         // manifeste modifié (arguments détournés)
-        std::fs::write(d.join("manifest.json"), b"{\"id\":\"mcp-x\",\"args\":[\"--evil\"]}").unwrap();
-        assert_eq!(evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()), TrustStatus::Modified);
+        std::fs::write(
+            d.join("manifest.json"),
+            b"{\"id\":\"mcp-x\",\"args\":[\"--evil\"]}",
+        )
+        .unwrap();
+        assert_eq!(
+            evaluate_trust(Some(&rec), &fingerprint(&d, &bin).unwrap()),
+            TrustStatus::Modified
+        );
         let _ = std::fs::remove_dir_all(&d);
     }
 

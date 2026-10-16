@@ -177,9 +177,7 @@ fn is_trusted_download_url(url: &str) -> bool {
     }
     match u.host_str() {
         Some(h) => {
-            h == "github.com"
-                || h == "api.github.com"
-                || h.ends_with(".githubusercontent.com")
+            h == "github.com" || h == "api.github.com" || h.ends_with(".githubusercontent.com")
         }
         None => false,
     }
@@ -191,7 +189,9 @@ async fn download(
     max_bytes: usize,
 ) -> Result<Vec<u8>, String> {
     if !is_trusted_download_url(url) {
-        return Err("Téléchargement refusé : l'adresse n'est pas une adresse GitHub en HTTPS".into());
+        return Err(
+            "Téléchargement refusé : l'adresse n'est pas une adresse GitHub en HTTPS".into(),
+        );
     }
     let resp = client
         .get(url)
